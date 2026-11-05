@@ -112,3 +112,22 @@ function programFromStagesForTest(card) {
   card._loadPreset({ title: "rt", stages });
   return card._setup;
 }
+
+// --- 0.10: typed timer, steam/ends grid, cog badge ---
+{
+  const src = require("fs").readFileSync(require("path").resolve(process.argv[2]), "utf8");
+  const a = src.indexOf("function parseMinutes"), b = src.indexOf("\nfunction stageBase");
+  const parseMinutes = new Function(`${src.slice(a, b)}; return parseMinutes;`)();
+  const cases = { "90": 90, "1:30": 90, "1h30": 90, "1 h 30 m": 90, "45m": 45, "2h": 120, "0:05": 5, "": null, "abc": null };
+  check("typed timer formats parse", Object.entries(cases).every(([t, v]) => parseMinutes(t) === v));
+  const c4 = new Card(); store["anova-oven-card:setup"] = null; c4.setConfig({});
+  let h4 = hass(); c4.hass = h4;
+  c4._update({ end: "timer" });
+  const out = c4.shadowRoot.innerHTML;
+  check("steam and ends share the grid", out.includes('<div class="se">'));
+  check("the timer value is tappable", out.includes('id="end-edit"'));
+  check("no badge when nothing is needed", !out.includes('class="badge"'));
+  h4 = hass({ "binary_sensor.descale_required": "on" }); c4.hass = h4;
+  check("descale needed puts a badge on the cog", c4.shadowRoot.innerHTML.includes('class="badge"'));
+  check("mode selection is not orange", !/\.option\.on \{ background: rgb\(var\(--oven-rgb\)\)/.test(src));
+}

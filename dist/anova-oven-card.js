@@ -24,7 +24,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.9.2";
+const CARD_VERSION = "0.10.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
@@ -189,6 +189,51 @@ class AnovaOvenCard extends HTMLElement {
     this._setProgram({ ...p, steps, sel: Math.min(p.sel, steps.length - 1) });
   }
 
+  // Tap the end value to type it: the timer in minutes, 1h30 or 1:30, or
+  // the probe target in °C. Enter or leaving the field commits; Escape
+  // cancels. On a running cook it sets the running timer.
+  _editEnd(m) {
+    const s = this._view();
+    const kind = m.cooking ? (m.timerTotal ? "timer" : null) : s.end;
+    const btn = this.shadowRoot.getElementById("end-edit");
+    if (!btn || (kind !== "timer" && kind !== "probe")) return;
+    const input = document.createElement("input");
+    input.className = "value-input";
+    input.type = "text";
+    input.inputMode = kind === "timer" ? "text" : "numeric";
+    input.value = kind === "timer" ? String(m.cooking ? Math.round(m.timerTotal / 60) : s.timer) : String(s.probe);
+    input.placeholder = kind === "timer" ? "min, 1h30, 1:30" : "°C";
+    input.setAttribute("aria-label", kind === "timer" ? "Timer" : "Probe target");
+    btn.replaceWith(input);
+    this._typing = true;
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      this._typing = false;
+      if (commit) {
+        if (kind === "timer") {
+          const min = parseMinutes(input.value);
+          if (min !== null && m.cooking) {
+            this._call("number", "set_value", { entity_id: this._id("number", "set_timer"), value: clamp(min, 1, 1440) });
+          } else if (min !== null) this._update({ timer: min });
+        } else {
+          const t = Number(input.value.replace(",", "."));
+          if (Number.isFinite(t)) this._update({ probe: t });
+        }
+      }
+      this._dirty = false;
+      this._render();
+    };
+    input.onkeydown = (ev) => {
+      if (ev.key === "Enter") { ev.preventDefault(); finish(true); }
+      if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
+    };
+    input.onblur = () => finish(true);
+    input.focus();
+    input.select();
+  }
+
   _refreshSaveButton() {
     const b = this.shadowRoot.getElementById("save");
     if (!b) return;
@@ -196,7 +241,7 @@ class AnovaOvenCard extends HTMLElement {
     const exists = this._recipes().some((r) => r.title === name);
     b.disabled = !name || !this._on("binary_sensor", "connected");
     b.classList.toggle("stop", exists);
-    b.classList.toggle("start", !exists);
+    b.classList.toggle("save", !exists);
     b.lastChild.textContent = exists ? "Replace" : "Save";
   }
 
@@ -341,7 +386,9 @@ class AnovaOvenCard extends HTMLElement {
             title="${this._lampPending ? "Switching…" : lampShown ? "Light on" : "Light off"}" ${off ? "disabled" : ""}>
             <ha-icon icon="${lampShown ? "mdi:lightbulb-on" : "mdi:lightbulb-outline"}"></ha-icon>
           </button>
-          <button class="icon-state tools ${this._panel === "maintenance" ? "on" : ""}" id="tools" title="Maintenance">
+          <button class="icon-state tools ${this._panel === "maintenance" ? "on" : ""}" id="tools"
+            title="${m.descale ? "Maintenance: descale needed" : m.waterEmpty ? "Maintenance: water tank empty" : "Maintenance"}">
+            ${m.descale || m.waterEmpty ? `<span class="badge"></span>` : ""}
             <ha-icon icon="mdi:cog-outline"></ha-icon>
           </button>
         </div>
@@ -364,13 +411,14 @@ class AnovaOvenCard extends HTMLElement {
             </button>
           </div>
 
+          <div class="se">
           ${slider("steam", steamFraction(m, s), steamLabel(m, s), off || live || s.sousVide, { buttons: false, tone: "steam" })}
 
-          <div class="pair end">
             ${select("end", ENDS.map((e) => ({ key: e.key, label: e.key === "probe" && m.probe === null ? "Probe: plug the probe in to use it" : e.label,
               html: `<ha-icon icon="${e.icon}"></ha-icon>`, disabled: e.key === "probe" && m.probe === null && s.end !== "probe" })),
               live ? (m.timerTotal ? "timer" : m.probe !== null ? "probe" : "none") : s.end, off || live)}
-            ${stepper("end", endValue(m, s), endDisabled(m, s, off))}
+            ${stepper("end", endValue(m, s), endDisabled(m, s, off), null,
+              { editable: !endDisabled(m, s, off), editTitle: "Tap to type: minutes (90), 1h30 or 1:30" })}
           </div>
 
           <div class="pair go">
@@ -434,7 +482,7 @@ class AnovaOvenCard extends HTMLElement {
         <div class="save-row">
           <input class="feature name" id="preset-name" type="text" maxlength="60" value="${esc(name)}"
             placeholder="Preset name" aria-label="Preset name">
-          <button class="feature action ${exists ? "stop" : "start"} ${armed("save") ? "armed" : ""} item-btn" id="save"
+          <button class="feature action ${exists ? "stop" : "save"} ${armed("save") ? "armed" : ""} item-btn" id="save"
             ${!m.connected || !name.trim() ? "disabled" : ""}>
             <ha-icon icon="mdi:content-save-outline"></ha-icon>${exists ? (armed("save") ? "Tap to replace" : "Replace") : "Save"}</button>
         </div>
@@ -549,6 +597,7 @@ class AnovaOvenCard extends HTMLElement {
     if ($("panel-close")) $("panel-close").onclick = () => { this._panel = null; this._undo = null; this._presetName = undefined; this._render(); };
     if ($("undo")) $("undo").onclick = () => { const u = this._undo; this._undo = null; if (u) this._setProgram(u.setup); };
     if ($("save")) $("save").onclick = () => this._savePreset();
+    if ($("end-edit")) $("end-edit").onclick = () => this._editEnd(m);
     const nameInput = $("preset-name");
     if (nameInput) {
       nameInput.oninput = () => { this._presetName = nameInput.value; this._refreshSaveButton(); };
@@ -685,11 +734,13 @@ function select(name, options, current, disabled) {
 }
 
 // HA's number-buttons feature: [ -   value   + ] in one 42 px row.
-function stepper(what, value, disabled, icon) {
+function stepper(what, value, disabled, icon, opts = {}) {
   return `
     <div class="feature stepper ${disabled ? "disabled" : ""}">
       <button class="pm" data-step="${what}:-1" aria-label="Less" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:minus"></ha-icon></button>
-      <span class="value">${icon ? `<ha-icon icon="${icon}"></ha-icon>` : ""}<span id="${what}-value">${esc(value)}</span></span>
+      ${opts.editable
+        ? `<button class="value editable" id="${what}-edit" title="${esc(opts.editTitle || "Tap to type")}">${icon ? `<ha-icon icon="${icon}"></ha-icon>` : ""}<span id="${what}-value">${esc(value)}</span></button>`
+        : `<span class="value">${icon ? `<ha-icon icon="${icon}"></ha-icon>` : ""}<span id="${what}-value">${esc(value)}</span></span>`}
       <button class="pm" data-step="${what}:1" aria-label="More" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:plus"></ha-icon></button>
     </div>`;
 }
@@ -810,6 +861,17 @@ function recipeSummary(r) {
   const sv = r.stages.some((sg) => sg.temperature_bulbs_mode === "wet") ? " · sous vide" : "";
   const n = cooks.length > 1 ? ` · ${cooks.length} steps` : "";
   return `${temp}${sv}${n}`;
+}
+
+// Minutes from "90", "1h30", "1 h 30 m", "45m", "2h" or "1:30" (h:mm).
+function parseMinutes(text) {
+  const t = String(text).trim().toLowerCase().replace(/\s+/g, "");
+  if (!t) return null;
+  let m;
+  if ((m = /^(\d+)$/.exec(t))) return Number(m[1]);
+  if ((m = /^(\d+):(\d{1,2})(?::\d{1,2})?$/.exec(t))) return Number(m[1]) * 60 + Number(m[2]);
+  if ((m = /^(?:(\d+)h)?(?:(\d+)(?:m|min)?)?$/.exec(t)) && (m[1] || m[2])) return Number(m[1] || 0) * 60 + Number(m[2] || 0);
+  return null;
 }
 
 function stageBase(st) {
@@ -990,7 +1052,11 @@ const STYLE = `
     --gap: var(--feature-button-spacing, 12px);
     --track: rgba(var(--rgb-primary-text-color, 33, 33, 33), .06);
   }
-  ha-card { padding: 12px; display: flex; flex-direction: column; gap: var(--gap); height: 100%; box-sizing: border-box; }
+  ha-card { padding: 12px; display: flex; flex-direction: column; gap: var(--gap); height: 100%; box-sizing: border-box;
+    container: oven / inline-size; }
+  /* Colour rule: orange = heat, light blue = water, neutral raised chip =
+     selected, amber = needs attention. */
+  :host { --selected-bg: var(--card-background-color, #fff); --selected-shadow: 0 1px 3px rgba(0, 0, 0, .16); }
   ha-card.active { --tone-rgb: var(--oven-rgb); }
   ha-card.error { --tone-rgb: var(--rgb-error-color, 219, 68, 55); }
   button { font: inherit; border: none; cursor: pointer; color: inherit; background: none; padding: 0;
@@ -1024,13 +1090,19 @@ const STYLE = `
   .pair { display: flex; gap: var(--gap); }
   .pair > * { flex: 1; min-width: 0; }
   .pair.wide > .toggle { flex: 0 0 var(--h); }
-  .pair.end > .select { flex: 0 0 calc(var(--h) * 3); }
+  /* Wide cards: steam sits next to the timer, one row less. */
+  @container oven (min-width: 460px) {
+    .se { grid-template-columns: calc(var(--h) * 3) minmax(150px, 1fr) minmax(0, 1fr); grid-template-areas: "ends val steam"; }
+    .panel { height: calc(var(--h) * 5 + var(--gap) * 4); }
+  }
 
   /* Select (HA's select and hvac-modes features). */
   .select { display: flex; background: var(--track); overflow: hidden; }
   .option { flex: 1; min-width: 0; display: grid; place-items: center; color: var(--secondary-text-color); border-radius: var(--r); }
   .option ha-icon { --mdc-icon-size: 20px; }
-  .option.on { background: rgb(var(--oven-rgb)); color: #fff; }
+  .select { padding: 3px; gap: 3px; }
+  .option { border-radius: 9px; }
+  .option.on { background: var(--selected-bg); color: var(--primary-text-color); box-shadow: var(--selected-shadow); }
   .option:disabled { opacity: .4; }
   .option.on:disabled { opacity: .55; }
 
@@ -1079,11 +1151,11 @@ const STYLE = `
   .chip-step ha-icon { --mdc-icon-size: 14px; }
   .chip-step .n { min-width: 16px; height: 16px; border-radius: 8px; display: inline-grid; place-items: center; font-size: 11px;
     font-weight: 700; background: rgba(var(--rgb-primary-text-color, 33, 33, 33), .1); }
-  .chip-step.on { background: var(--card-background-color, #fff); color: rgb(var(--oven-rgb));
+  .chip-step.on { background: var(--selected-bg); color: var(--primary-text-color);
     box-shadow: 0 1px 3px rgba(0, 0, 0, .14); }
-  .chip-step.on .n { background: rgb(var(--oven-rgb)); color: #fff; }
+  .chip-step.on .n { background: var(--primary-text-color); color: var(--card-background-color, #fff); }
   .chip-step.done { color: var(--secondary-text-color); }
-  .chip-step.done .n { background: rgba(var(--oven-rgb), .25); color: rgb(var(--oven-rgb)); }
+  .chip-step.done .n { background: rgba(var(--rgb-primary-text-color, 33, 33, 33), .18); color: var(--primary-text-color); }
   .chip-step .x { display: grid; place-items: center; width: 20px; height: 20px; margin-right: -4px; border-radius: 50%;
     color: var(--secondary-text-color); }
   .chip-step .x:hover { background: rgba(var(--rgb-error-color, 219, 68, 55), .15); color: var(--error-color, #db4437); }
@@ -1098,12 +1170,15 @@ const STYLE = `
 
   /* Probe status: orange while plugged in. */
   .icon-state.probe { opacity: .4; }
-  .icon-state.probe.in { opacity: 1; color: rgb(var(--oven-rgb)); background: rgba(var(--oven-rgb), .15); }
+  .icon-state.probe.in { opacity: 1; color: var(--primary-text-color); background: rgba(var(--rgb-primary-text-color, 33, 33, 33), .1); }
   .icon-state.tools { background: var(--track); }
-  .icon-state.tools.on { background: rgba(var(--oven-rgb), .2); color: rgb(var(--oven-rgb)); }
+  .icon-state.tools { position: relative; }
+  .icon-state.tools.on { background: rgba(var(--rgb-primary-text-color, 33, 33, 33), .16); color: var(--primary-text-color); }
+  .badge { position: absolute; top: 3px; right: 3px; width: 9px; height: 9px; border-radius: 50%;
+    background: var(--warning-color, #e69500); box-shadow: 0 0 0 2px var(--card-background-color, #fff); }
 
   /* Maintenance panel: exactly the height of the five rows. */
-  .chip-step.book { padding: 0 8px; color: rgb(var(--oven-rgb)); }
+  .chip-step.book { padding: 0 8px; color: var(--secondary-text-color); }
   .chip-step.book ha-icon { --mdc-icon-size: 18px; }
   .item.preset { padding: 6px 6px 6px 12px; gap: 4px; }
   .item.note { background: rgba(var(--oven-rgb), .12); }
@@ -1119,6 +1194,15 @@ const STYLE = `
   .name { flex: 1; min-width: 0; border: none; padding: 0 12px; background: var(--track); color: var(--primary-text-color);
     font: inherit; font-size: 14px; outline: none; }
   .name:focus { box-shadow: inset 0 0 0 2px rgba(var(--oven-rgb), .6); }
+  .se { display: grid; gap: var(--gap); grid-template-columns: calc(var(--h) * 3) minmax(0, 1fr);
+    grid-template-areas: "steam steam" "ends val"; }
+  .se > .slider { grid-area: steam; } .se > .select { grid-area: ends; } .se > .stepper { grid-area: val; }
+  .value.editable { cursor: text; border-radius: 8px; height: 32px; }
+  .value.editable:hover { background: rgba(var(--rgb-primary-text-color, 33, 33, 33), .06); }
+  .value.editable span { text-decoration: underline dotted rgba(var(--rgb-primary-text-color, 33, 33, 33), .35); text-underline-offset: 4px; }
+  .value-input { flex: 1; min-width: 0; height: 32px; border: none; border-radius: 8px; text-align: center; font: inherit;
+    font-size: 14px; font-weight: 500; color: var(--primary-text-color); background: var(--card-background-color, #fff);
+    box-shadow: inset 0 0 0 2px var(--primary-color, #03a9f4); outline: none; }
   .panel { height: calc(var(--h) * 6 + var(--gap) * 5); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
   .panel-head { display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-weight: 600;
     color: var(--primary-text-color); }
@@ -1136,6 +1220,8 @@ const STYLE = `
     background: var(--track); color: var(--primary-text-color); }
   .action ha-icon { --mdc-icon-size: 20px; }
   .action.start { background: rgb(var(--oven-rgb)); color: #fff; }
+  .action.save { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
+  .action.save:disabled { opacity: .4; }
   .action.start:disabled { opacity: .4; }
   .action.stop { background: rgba(var(--rgb-error-color, 219, 68, 55), .15); color: var(--error-color, #db4437); }
   .action.stop.armed { background: var(--error-color, #db4437); color: #fff; }

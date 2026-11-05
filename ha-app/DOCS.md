@@ -48,7 +48,10 @@ door, light) it always shows the same six rows, so it never changes size:
 3. Steam: drag the light-blue slider (10 % steps). With sous vide on, it
    is 100 % and locked. During a cook, it shows the measured humidity.
 4. How the cook ends: until you stop, a timer, or a probe temperature,
-   with - and + for the time or the probe target.
+   with - and + for the time or the probe target. Tap the value to type
+   it: minutes (90), 1h30 or 1:30, or the probe temperature. On a wide
+   card (about 460 px and more), steam sits in this row, next to the
+   timer.
 5. Preheat and Bake (or Cook, with sous vide on). With Preheat on, the
    oven heats up first, and step 1 and its timer start at temperature.
    For step 2 and later, the left button chooses "Auto start" or
@@ -60,7 +63,8 @@ During a cook, the temperature slider and - and + change the running
 cook's temperature, and - and + change a running timer.
 
 The header shows the door, the probe (orange while plugged in; its
-temperature is in the status line), the light, and a cog. "End by
+temperature is in the status line), the light, and a cog. An amber dot
+on the cog means a descale is needed or the water tank is empty. "End by
 probe" works only with the probe plugged in.
 
 The book button (left of the steps) opens the presets in the same space:
