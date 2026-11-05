@@ -65,16 +65,21 @@ app is in `ha-app/`.
 **Install, once:**
 
 1. In HA: Settings → Apps → App store → ⋮ → Repositories. Add
-   `https://github.com/urosgruber/anova-oven-ha`.
+   `https://github.com/urosgruber/anova-oven-ha#release`.
+   The `#release` part matters: HA then reads the `release` branch.
 2. Install **Anova Oven**.
 
-**Release a new version:**
+**Release a new version:** raise `version` in `ha-app/config.yaml` and push
+to `main`. That is all. GitHub Actions (`.github/workflows/ha-app.yml`):
 
-1. Raise `version` in `ha-app/config.yaml` and commit.
-2. Tag and push: `git tag v<version> && git push origin v<version>`.
-3. GitHub Actions (`.github/workflows/ha-app.yml`) tests the server, builds
-   the image and pushes `ghcr.io/urosgruber/anova-oven-ha-amd64:<version>`.
-4. HA shows the update. Click **Update**.
+1. tests the server,
+2. builds and pushes `ghcr.io/urosgruber/anova-oven-ha-amd64:<version>`,
+3. tags `v<version>`,
+4. updates the `release` branch, which holds only `repository.yaml` and the
+   app's config, docs and images.
+
+HA sees the new version only after step 4, so it never offers a version
+without an image. Do not tag by hand.
 
 The app also ships the dashboard card (`dist/anova-oven-card.js`) and
 registers it in HA at every start, so one app version covers the server and
