@@ -36,7 +36,7 @@ check("idle renders the steps row with one chip and +", html().includes('data-ch
 check("start label is Bake", />\s*Bake<\/button>/.test(html()) || html().includes("</ha-icon>Bake</button>"));
 c._addStep();
 check("+ adds step 2 and selects it", c._setup.steps.length === 2 && c._setup.sel === 1);
-check("step 2 shows the remove x and the Waits toggle", html().includes('id="step-remove"') && html().includes('id="waits"'));
+check("step 2 shows the remove x and the Waits toggle", html().includes('id="step-remove"') && html().includes('id="waits"') && html().includes("Auto start"));
 c._update({ temp: 200, end: "timer", timer: 15 });
 check("controls edit only the selected step", c._setup.steps[1].temp === 200 && c._setup.steps[0].temp === 180);
 c._update({ waits: true });

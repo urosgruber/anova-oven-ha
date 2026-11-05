@@ -24,7 +24,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.9.1";
+const CARD_VERSION = "0.9.2";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
@@ -388,7 +388,7 @@ class AnovaOvenCard extends HTMLElement {
                   title="${s.waits ? `Step ${s.sel + 1} waits until you tap Next stage` : `Step ${s.sel + 1} starts when step ${s.sel} ends`}"
                   aria-pressed="${s.waits}" ${off ? "disabled" : ""}>
                   <ha-icon icon="${s.waits ? "mdi:hand-back-right-outline" : "mdi:arrow-right-bold-outline"}"></ha-icon>
-                  <span>${s.waits ? "Waits for me" : "Starts by itself"}</span>
+                  <span>${s.waits ? "Wait for me" : "Auto start"}</span>
                 </button>`}
               <button class="feature action start" id="start" ${off || needsProbe ? "disabled" : ""}>
                 <ha-icon icon="mdi:play"></ha-icon>${startLabel(s)}</button>`}
@@ -1091,7 +1091,9 @@ const STYLE = `
   .chip-step.add ha-icon { --mdc-icon-size: 18px; }
   .chip-step:disabled { opacity: .4; }
   .steps.running .chip-step { padding: 0 6px; }
-  .pair.go > .toggle.labeled { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 0 14px;
+  /* A fixed width, so Bake / Cook keeps its size when the label changes. */
+  .pair.go > .toggle.labeled { flex: 0 0 136px; display: inline-flex; align-items: center; justify-content: center;
+    gap: 6px; padding: 0 10px; white-space: nowrap; overflow: hidden;
     font-size: 14px; font-weight: 500; }
 
   /* Probe status: orange while plugged in. */

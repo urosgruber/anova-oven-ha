@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.2
+
+- The button next to Bake / Cook has a fixed width, so Bake / Cook keeps
+  its size when you switch steps. Its labels are shorter: Preheat, Auto
+  start, Wait for me.
+
 ## 0.9.1
 
 - The cog no longer shows as selected while the presets are open.
