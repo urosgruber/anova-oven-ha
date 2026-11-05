@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.10.0
+
+- Less orange. Orange now means heat only: the temperature, Bake / Cook,
+  Preheat, and the progress during a cook. Light blue means water. A
+  selected mode, end type or step is a raised neutral chip.
+- Type the timer: tap its value and enter minutes (90), 1h30 or 1:30. Tap
+  the probe value to type the probe temperature. On a running cook, the
+  typed time sets the running timer.
+- Wide cards (about 460 px and more) put steam next to the timer, so the
+  card is one row shorter. Narrow cards and phones keep steam in its own
+  row.
+- An amber dot on the cog when a descale is needed or the water tank is
+  empty.
+- Save in the presets uses Home Assistant's main colour.
+
 ## 0.9.2
 
 - The button next to Bake / Cook has a fixed width, so Bake / Cook keeps
