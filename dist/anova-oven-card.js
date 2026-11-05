@@ -24,7 +24,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.10.2";
+const CARD_VERSION = "0.10.3";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
@@ -63,6 +63,9 @@ const DEFAULT_STEP = {
 };
 const DEFAULT_SETUP = { steps: [DEFAULT_STEP], sel: 0, preheat: true };
 const MAX_STEPS = 8;
+// From this card width, steam sits next to the timer: ends 126 + timer 130 +
+// steam 90 + two 12 px gaps + 24 px padding.
+const WIDE_PX = 394;
 
 class AnovaOvenCard extends HTMLElement {
   static getStubConfig() {
@@ -121,10 +124,23 @@ class AnovaOvenCard extends HTMLElement {
   }
 
   connectedCallback() {
+    // The card's width decides the layout. A CSS container query does not
+    // reach through ha-card's shadow DOM, so measure it here.
+    if (typeof ResizeObserver !== "undefined" && !this._ro) {
+      this._ro = new ResizeObserver((entries) => {
+        const wide = entries[0].contentRect.width >= WIDE_PX;
+        if (wide === this._wide) return;
+        this._wide = wide;
+        const card = this.shadowRoot && this.shadowRoot.querySelector("ha-card");
+        if (card) card.classList.toggle("wide", wide);
+      });
+      this._ro.observe(this);
+    }
     this._tick = setInterval(() => this._renderLive(), 1000);
   }
 
   disconnectedCallback() {
+    if (this._ro) { this._ro.disconnect(); this._ro = null; }
     clearInterval(this._tick);
   }
 
@@ -368,7 +384,7 @@ class AnovaOvenCard extends HTMLElement {
 
     this.shadowRoot.innerHTML = `
       <style>${STYLE}</style>
-      <ha-card class="${tone}">
+      <ha-card class="${tone} ${this._wide ? "wide" : ""}">
         <div class="header">
           <div class="shape"><ha-icon icon="${live ? "mdi:stove" : "mdi:toaster-oven"}"></ha-icon></div>
           <div class="info">
@@ -1053,10 +1069,10 @@ const STYLE = `
     --track: rgba(var(--rgb-primary-text-color, 33, 33, 33), .06);
   }
   ha-card { padding: 12px; display: flex; flex-direction: column; gap: var(--gap); height: 100%; box-sizing: border-box;
-    container: oven / inline-size; }
+    }
   /* Colour rule: orange = heat, light blue = water, neutral raised chip =
      selected, amber = needs attention. */
-  :host { --selected-bg: var(--card-background-color, #fff); --selected-shadow: 0 1px 3px rgba(0, 0, 0, .16); }
+  :host { display: block; --selected-bg: var(--card-background-color, #fff); --selected-shadow: 0 1px 3px rgba(0, 0, 0, .16); }
   ha-card.active { --tone-rgb: var(--oven-rgb); }
   ha-card.error { --tone-rgb: var(--rgb-error-color, 219, 68, 55); }
   button { font: inherit; border: none; cursor: pointer; color: inherit; background: none; padding: 0;
@@ -1093,10 +1109,9 @@ const STYLE = `
   /* Steam sits next to the timer when the row fits: ends 126 + timer 130 +
      steam 90 + two gaps = 370 px inside the card (about 394 px card width).
      The query measures the card's content box, inside its padding. */
-  @container oven (min-width: 370px) {
-    .se { grid-template-columns: calc(var(--h) * 3) minmax(130px, 1fr) minmax(90px, 1fr); grid-template-areas: "ends val steam"; }
-    .panel { height: calc(var(--h) * 5 + var(--gap) * 4); }
-  }
+  ha-card.wide .se { grid-template-columns: calc(var(--h) * 3) minmax(130px, 1fr) minmax(90px, 1fr);
+    grid-template-areas: "ends val steam"; }
+  ha-card.wide .panel { height: calc(var(--h) * 5 + var(--gap) * 4); }
 
   /* Select (HA's select and hvac-modes features). */
   .select { display: flex; background: var(--track); overflow: hidden; }

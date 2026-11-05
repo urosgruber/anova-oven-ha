@@ -131,3 +131,20 @@ function programFromStagesForTest(card) {
   check("descale needed puts a badge on the cog", c4.shadowRoot.innerHTML.includes('class="badge"'));
   check("mode selection is not orange", !/\.option\.on \{ background: rgb\(var\(--oven-rgb\)\)/.test(src));
 }
+
+// --- 0.10.3: the width class comes from a ResizeObserver ---
+{
+  let observed;
+  global.ResizeObserver = class { constructor(cb) { observed = cb; } observe() {} disconnect() {} };
+  global.setInterval = () => 0; global.clearInterval = () => {};
+  const c5 = new Card(); store["anova-oven-card:setup"] = null; c5.setConfig({});
+  c5.shadowRoot.querySelector = () => null;
+  c5.connectedCallback(); c5.hass = hass();
+  observed([{ contentRect: { width: 450 } }]); c5._render();
+  check("a 450 px card gets the wide layout", /<ha-card class="[^"]*\bwide\b/.test(c5.shadowRoot.innerHTML));
+  observed([{ contentRect: { width: 360 } }]); c5._render();
+  check("a 360 px card keeps steam in its own row", !/<ha-card class="[^"]*\bwide\b/.test(c5.shadowRoot.innerHTML));
+  const src = require("fs").readFileSync(require("path").resolve(process.argv[2]), "utf8");
+  check("no container query left", !src.includes("@container"));
+  c5.disconnectedCallback();
+}
