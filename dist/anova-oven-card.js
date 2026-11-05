@@ -24,7 +24,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.10.0";
+const CARD_VERSION = "0.10.1";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
@@ -767,7 +767,7 @@ function steamFraction(m, s) {
 
 function steamLabel(m, s) {
   if (m.cooking) return m.steam === null ? "Steam —" : `Steam ${Math.round(m.steam)} %`;
-  if (s.sousVide) return "Steam 100 % (sous vide)";
+  if (s.sousVide) return "100 % (sous vide)";
   return s.steam ? `Steam ${s.steam} %` : "No steam";
 }
 
@@ -1090,9 +1090,11 @@ const STYLE = `
   .pair { display: flex; gap: var(--gap); }
   .pair > * { flex: 1; min-width: 0; }
   .pair.wide > .toggle { flex: 0 0 var(--h); }
-  /* Wide cards: steam sits next to the timer, one row less. */
-  @container oven (min-width: 460px) {
-    .se { grid-template-columns: calc(var(--h) * 3) minmax(150px, 1fr) minmax(0, 1fr); grid-template-areas: "ends val steam"; }
+  /* Steam sits next to the timer when the row fits: ends 126 + timer 130 +
+     steam 90 + two gaps = 370 px inside the card (about 394 px card width).
+     The query measures the card's content box, inside its padding. */
+  @container oven (min-width: 370px) {
+    .se { grid-template-columns: calc(var(--h) * 3) minmax(130px, 1fr) minmax(90px, 1fr); grid-template-areas: "ends val steam"; }
     .panel { height: calc(var(--h) * 5 + var(--gap) * 4); }
   }
 
@@ -1133,7 +1135,8 @@ const STYLE = `
   .fill { position: absolute; inset: 0 auto 0 0; background: rgba(var(--oven-rgb), .45); border-radius: 8px 0 0 8px; }
   .fill::after { content: ""; position: absolute; right: 4px; top: 50%; width: 4px; height: 16px; margin-top: -8px;
     border-radius: 2px; background: #fff; box-shadow: 0 0 2px rgba(0, 0, 0, .3); }
-  .track-value { position: relative; display: grid; place-items: center; height: 100%; font-size: 14px; font-weight: 500;
+  .track-value { position: relative; display: block; line-height: 30px; padding: 0 8px; text-align: center; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; height: 100%; font-size: 14px; font-weight: 500;
     color: var(--primary-text-color); font-variant-numeric: tabular-nums; pointer-events: none; }
 
   /* Toggles (sous vide, preheat) and actions. */

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.1
+
+- Steam now sits next to the timer from a card width of about 394 px (was
+  about 484 px). Only very narrow cards keep steam in its own row. Long
+  steam labels end with "…" instead of overflowing.
+
 ## 0.10.0
 
 - Less orange. Orange now means heat only: the temperature, Bake / Cook,
