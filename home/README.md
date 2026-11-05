@@ -10,7 +10,7 @@ code plus our own changes.
 
 | Remote | Repo | Use |
 |---|---|---|
-| `origin` | `urosgruber/anova-oven` | Push our work here. |
+| `origin` | `urosgruber/anova-oven-local` | Push our work here. |
 | `upstream` | `robdimsdale/anova-oven-rs` | Fetch only. Push is disabled. |
 
 ## Get upstream changes
