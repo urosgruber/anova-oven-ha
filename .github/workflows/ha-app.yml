@@ -1,0 +1,70 @@
+# Ours, not upstream's: test the server, and on a v<version> tag build the
+# Home Assistant app image and push it to GHCR. Upstream's workflows are
+# disabled in this repo (gh workflow disable), so only this one runs.
+name: HA app
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install stable toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          toolchain: stable
+
+      - name: Test
+        run: cargo test --locked -p anova-oven-server
+
+  image:
+    name: Build and push app image
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check the tag matches ha-app/config.yaml
+        id: version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if ! grep -qx "version: \"${version}\"" ha-app/config.yaml; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match the version in ha-app/config.yaml"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ha-app/Dockerfile
+          platforms: linux/amd64
+          build-args: |
+            BUILD_VERSION=${{ steps.version.outputs.version }}
+          tags: ghcr.io/urosgruber/anova-oven-ha-amd64:${{ steps.version.outputs.version }}
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
