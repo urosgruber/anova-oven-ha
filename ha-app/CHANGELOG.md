@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.2
+
+- Fix taps that did nothing, so that a button needed two or three taps.
+  The card rebuilt itself whenever any entity in Home Assistant changed,
+  and a rebuild between press and release dropped the tap. Now it rebuilds
+  only when an oven entity changes, and never while a finger or mouse
+  button is down.
+- The greyed-out probe option says why: plug the probe in to use it.
+
 ## 0.7.1
 
 - Add this changelog. Home Assistant shows it on the app page and in the

@@ -24,10 +24,18 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.7.0";
+const CARD_VERSION = "0.7.2";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
+
+// The entities the card reads. It re-renders only when one of them changes.
+const WATCHED = [
+  "binary_sensor.connected", "binary_sensor.cooking", "binary_sensor.next_stage_ready", "binary_sensor.door",
+  "binary_sensor.water_tank_empty", "binary_sensor.descale_required", "light.lamp", "event.cook",
+  "sensor.mode", "sensor.temperature", "sensor.target_temperature", "sensor.probe_temperature", "sensor.steam",
+  "sensor.stage_ends_at", "sensor.stage", "sensor.stage_description", "sensor.current_recipe", "number.set_timer",
+];
 
 // The oven runs any one or two of its three elements.
 const MODES = [
@@ -60,18 +68,41 @@ class AnovaOvenCard extends HTMLElement {
     this._lampPending = null;
     this._panel = null;
     this._setup = loadSetup();
-    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    if (!this.shadowRoot) {
+      this.attachShadow({ mode: "open" });
+      // A tap is a press and a release on the same element. A re-render in
+      // between replaces the element, and the browser drops the tap. So no
+      // re-render while a pointer is down; a pending one runs on release.
+      this.shadowRoot.addEventListener("pointerdown", () => {
+        this._pressing = true;
+        const release = () => {
+          this._pressing = false;
+          if (this._dirty && !this._holding) { this._dirty = false; this._render(); }
+        };
+        window.addEventListener("pointerup", release, { once: true });
+        window.addEventListener("pointercancel", release, { once: true });
+      }, { capture: true });
+    }
     this._render();
   }
 
   set hass(hass) {
+    const before = this._hass;
     this._hass = hass;
+    // HA sets hass on every state change in the whole instance. HA replaces
+    // a state object when it changes, so comparing references is enough.
+    const changed = !before || WATCHED.some((w) => {
+      const id = this._id(...w.split("."));
+      return before.states[id] !== hass.states[id];
+    });
+    if (!changed) return;
     if (this._lampPending) {
       const lamp = this._on("light", "lamp");
       if (lamp === this._lampPending.on || Date.now() > this._lampPending.until) this._lampPending = null;
     }
-    // A re-render during a drag or a held button would replace that element.
-    if (!this._holding) this._render();
+    // A re-render during a tap, drag or held button would replace that element.
+    if (this._holding || this._pressing) this._dirty = true;
+    else this._render();
   }
 
   getCardSize() {
@@ -309,7 +340,7 @@ class AnovaOvenCard extends HTMLElement {
           ${slider("steam", steamFraction(m, s), steamLabel(m, s), off || live || s.sousVide, { buttons: false, tone: "steam" })}
 
           <div class="pair end">
-            ${select("end", ENDS.map((e) => ({ key: e.key, label: e.key === "probe" && m.probe === null ? "Probe (plug it in first)" : e.label,
+            ${select("end", ENDS.map((e) => ({ key: e.key, label: e.key === "probe" && m.probe === null ? "Probe: plug the probe in to use it" : e.label,
               html: `<ha-icon icon="${e.icon}"></ha-icon>`, disabled: e.key === "probe" && m.probe === null && s.end !== "probe" })),
               live ? (m.timerTotal ? "timer" : m.probe !== null ? "probe" : "none") : s.end, off || live)}
             ${stepper("end", endValue(m, s), endDisabled(m, s, off))}
@@ -463,6 +494,7 @@ class AnovaOvenCard extends HTMLElement {
       if (!this._holding) return;
       cleanup();
       this._holding = false;
+      this._dirty = false;
       this._render();
     };
     window.addEventListener("pointerup", end, { once: true });
