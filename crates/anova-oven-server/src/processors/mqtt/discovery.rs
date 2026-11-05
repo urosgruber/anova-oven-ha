@@ -109,7 +109,7 @@ fn config(topics: &Topics, e: &Entity) -> Value {
     if matches!(e.needs, Needs::Oven | Needs::WaitingStage) {
         availability.push(json!({
             "topic": topics.state(),
-            "value_template": "{{ 'online' if value_json.connected else 'offline' }}",
+            "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}",
         }));
     }
     if matches!(e.needs, Needs::WaitingStage) {
@@ -310,28 +310,28 @@ fn entities(topics: &Topics, options: &[String]) -> Vec<Entity> {
             "connected",
             "Connected",
             Needs::Server,
-            on_off(topics, "value_json.connected", Some("connectivity")),
+            on_off(topics, "value_json.get('connected')", Some("connectivity")),
         ),
         entity(
             "binary_sensor",
             "cooking",
             "Cooking",
             Needs::Oven,
-            on_off(topics, "value_json.mode != 'idle'", Some("running")),
+            on_off(topics, "value_json.get('mode', 'idle') not in ['idle', 'unknown']", Some("running")),
         ),
         entity(
             "binary_sensor",
             "door",
             "Door",
             Needs::Oven,
-            on_off(topics, "value_json.door_open", Some("door")),
+            on_off(topics, "value_json.get('door_open')", Some("door")),
         ),
         entity(
             "binary_sensor",
             "water_tank_empty",
             "Water tank empty",
             Needs::Oven,
-            on_off(topics, "value_json.water_tank_empty", Some("problem")),
+            on_off(topics, "value_json.get('water_tank_empty')", Some("problem")),
         ),
         entity(
             "binary_sensor",
@@ -351,7 +351,7 @@ fn entities(topics: &Topics, options: &[String]) -> Vec<Entity> {
             Needs::Oven,
             on_off(
                 topics,
-                "value_json.boiler_descale_required",
+                "value_json.get('boiler_descale_required')",
                 Some("problem"),
             ),
         ),
@@ -405,7 +405,7 @@ fn entities(topics: &Topics, options: &[String]) -> Vec<Entity> {
             json!({
                 "command_topic": topics.command("lamp"),
                 "state_topic": topics.state(),
-                "state_value_template": "{{ 'ON' if value_json.lamp_on else 'OFF' }}",
+                "state_value_template": "{{ 'ON' if value_json.get('lamp_on') else 'OFF' }}",
                 "payload_on": "ON",
                 "payload_off": "OFF",
             }),
@@ -436,7 +436,7 @@ fn entities(topics: &Topics, options: &[String]) -> Vec<Entity> {
                 "command_topic": topics.command("timer"),
                 "command_template": "{{ (value * 60) | int }}",
                 "state_topic": topics.state(),
-                "value_template": "{{ (value_json.timer_total_secs / 60) | round(0) | int }}",
+                "value_template": "{% set s = value_json.get('timer_total_secs') %}{{ (s / 60) | round(0) | int if s else 'None' }}",
                 "min": 1,
                 "max": 1440,
                 "step": 1,
