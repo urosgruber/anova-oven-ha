@@ -61,3 +61,53 @@ check("offline renders", html().includes("Offline"));
 store["anova-oven-card:setup"] = JSON.stringify({ mode: "rear", sousVide: true, temp: 56, end: "timer", timer: 90, preheat: false });
 const c2 = new Card(); c2.setConfig({}); 
 check("0.7 setup migrates", c2._setup.steps.length === 1 && c2._setup.steps[0].mode === "rear" && c2._setup.steps[0].temp === 56 && c2._setup.preheat === false);
+
+// --- Presets (0.9) ---
+const recipes = [
+  { title: "Pizza", stages: [
+    { kind: "preheat", temperature_c: 250, temperature_bulbs_mode: "dry", steam_pct: 0, fan_speed: 100, heating_element_top: true, heating_element_bottom: true },
+    { kind: "cook", temperature_c: 250, temperature_bulbs_mode: "dry", steam_pct: 20, fan_speed: 100, heating_element_top: true, heating_element_bottom: true, timer_added: true, duration_secs: 600 },
+    { kind: "cook", temperature_c: 200, temperature_bulbs_mode: "dry", steam_pct: 0, fan_speed: 100, heating_element_rear: true, timer_added: true, duration_secs: 300, user_action_required: true },
+  ] },
+  { title: "Salmon", stages: [
+    { kind: "cook", temperature_c: 52, temperature_bulbs_mode: "wet", steam_pct: 100, fan_speed: 100, heating_element_rear: true, probe_added: true, probe_target_c: 48 },
+  ] },
+];
+const c3 = new Card();
+store["anova-oven-card:setup"] = null;
+c3.setConfig({});
+h = hass(); h.states[`sensor.${P}_recipes`] = st("2", { recipes }); c3.hass = h;
+c3._panel = "presets"; c3._render();
+const h3 = () => c3.shadowRoot.innerHTML;
+check("presets panel lists both recipes", h3().includes("Pizza") && h3().includes("Salmon") && h3().includes('data-run="1"'));
+check("summary shows steps and sous vide", h3().includes("250° · 2 steps") && h3().includes("52° · sous vide"));
+const before = JSON.stringify(c3._setup);
+c3._loadPreset(recipes[0]);
+check("load: preheat on, 2 steps, rear for step 2, waits", c3._setup.preheat === true && c3._setup.steps.length === 2
+  && c3._setup.steps[1].mode === "rear" && c3._setup.steps[1].waits === true && c3._setup.steps[0].steam === 20);
+check("load offers Undo", h3().includes('id="undo"'));
+c3._setProgram(c3._undo.setup); c3._undo = null;
+check("undo restores the previous steps", JSON.stringify(c3._setup) === before);
+c3._loadPreset(recipes[1]);
+check("load sous vide + probe", c3._setup.preheat === false && c3._setup.steps[0].sousVide && c3._setup.steps[0].end === "probe" && c3._setup.steps[0].probe === 48);
+c3._presetName = "New one"; c3._savePreset();
+let call = h.calls.at(-1);
+check("save publishes a new recipe", call.data.topic === "anova/oven/cmd/save_recipe" && !JSON.parse(call.data.payload).replace
+  && JSON.parse(call.data.payload).title === "New one");
+c3._presetName = "Pizza"; const n = h.calls.length; c3._savePreset();
+check("replacing an existing name needs a second tap", h.calls.length === n && c3._armed.key === "save");
+c3._savePreset();
+call = h.calls.at(-1);
+check("second tap replaces", JSON.parse(call.data.payload).replace === "Pizza");
+// Steps -> stages -> steps is lossless for what the card edits.
+c3._loadPreset(recipes[0]);
+const again = programFromStagesForTest(c3);
+check("round trip keeps the program", JSON.stringify(again.steps) === JSON.stringify(c3._setup.steps) && again.preheat === c3._setup.preheat);
+
+function programFromStagesForTest(card) {
+  // Save builds the stages; Load turns them back into steps.
+  card._presetName = "rt"; card._savePreset();
+  const stages = JSON.parse(h.calls.at(-1).data.payload).stages;
+  card._loadPreset({ title: "rt", stages });
+  return card._setup;
+}

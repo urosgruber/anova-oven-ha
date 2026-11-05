@@ -24,7 +24,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.8.0";
+const CARD_VERSION = "0.9.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
@@ -35,6 +35,7 @@ const WATCHED = [
   "binary_sensor.water_tank_empty", "binary_sensor.descale_required", "light.lamp", "event.cook",
   "sensor.mode", "sensor.temperature", "sensor.target_temperature", "sensor.probe_temperature", "sensor.steam",
   "sensor.stage_ends_at", "sensor.stage", "sensor.stage_description", "sensor.current_recipe", "number.set_timer",
+  "sensor.recipes",
 ];
 
 // The oven runs any one or two of its three elements.
@@ -107,7 +108,7 @@ class AnovaOvenCard extends HTMLElement {
       if (lamp === this._lampPending.on || Date.now() > this._lampPending.until) this._lampPending = null;
     }
     // A re-render during a tap, drag or held button would replace that element.
-    if (this._holding || this._pressing) this._dirty = true;
+    if (this._holding || this._pressing || this._typing) this._dirty = true;
     else this._render();
   }
 
@@ -166,19 +167,9 @@ class AnovaOvenCard extends HTMLElement {
   // --- Actions ------------------------------------------------------------
 
   _start() {
-    const p = this._setup;
-    const stages = [];
-    p.steps.forEach((st, i) => {
-      const base = stageBase(st);
-      if (i === 0 && p.preheat) stages.push({ ...base, kind: "preheat" });
-      const cook = { ...base, kind: "cook", user_action_required: i > 0 && st.waits };
-      if (st.end === "timer") Object.assign(cook, { timer_added: true, duration_secs: st.timer * 60 });
-      if (st.end === "probe") Object.assign(cook, { probe_added: true, probe_target_c: st.probe });
-      stages.push(cook);
-    });
     this._call("mqtt", "publish", {
       topic: `${this._config.mqtt_prefix}/cmd/start`,
-      payload: JSON.stringify({ title: programTitle(p), stages }),
+      payload: JSON.stringify({ title: programTitle(this._setup), stages: programStages(this._setup) }),
     });
   }
 
@@ -196,6 +187,17 @@ class AnovaOvenCard extends HTMLElement {
     if (p.steps.length < 2) return;
     const steps = p.steps.filter((_, i) => i !== p.sel);
     this._setProgram({ ...p, steps, sel: Math.min(p.sel, steps.length - 1) });
+  }
+
+  _refreshSaveButton() {
+    const b = this.shadowRoot.getElementById("save");
+    if (!b) return;
+    const name = (this._presetName ?? "").trim();
+    const exists = this._recipes().some((r) => r.title === name);
+    b.disabled = !name || !this._on("binary_sensor", "connected");
+    b.classList.toggle("stop", exists);
+    b.classList.toggle("start", !exists);
+    b.lastChild.textContent = exists ? "Replace" : "Save";
   }
 
   _setProgram(p) {
@@ -345,7 +347,7 @@ class AnovaOvenCard extends HTMLElement {
         </div>
 
         <div class="features">
-          ${this._panel === "maintenance" ? this._maintenanceView(m) : `
+          ${this._panel === "maintenance" ? this._maintenanceView(m) : this._panel === "presets" ? this._presetsView(m) : `
           ${live ? runningChips(m) : stepChips(s, off)}
           ${live ? `
             <div class="feature progress" title="${esc(m.stageDescription || "")}">
@@ -395,6 +397,83 @@ class AnovaOvenCard extends HTMLElement {
         </div>
       </ha-card>`;
     this._bind(m, { lo: tlo, hi: thi, disabled: tDisabled });
+  }
+
+  _recipes() {
+    const list = (this._state("sensor", "recipes") || {}).attributes?.recipes;
+    return Array.isArray(list) ? list.filter((r) => r && r.title && Array.isArray(r.stages)) : [];
+  }
+
+  _presetsView(m) {
+    const recipes = this._recipes();
+    const name = this._presetName ?? programTitle(this._setup);
+    const exists = recipes.some((r) => r.title === name.trim());
+    const armed = (key) => this._armed && this._armed.key === key && Date.now() < this._armed.until;
+    const busy = !m.connected || m.cooking;
+    return `
+      <div class="panel">
+        <div class="panel-head">
+          <span>Presets</span>
+          <button class="icon-state" id="panel-close" title="Close"><ha-icon icon="mdi:close"></ha-icon></button>
+        </div>
+        ${this._undo ? `
+          <div class="item note">
+            <div class="item-text"><b>Loaded “${esc(this._undo.title)}”</b><span>The steps are in the editor.</span></div>
+            <button class="feature action item-btn" id="undo"><ha-icon icon="mdi:undo"></ha-icon>Undo</button>
+          </div>` : ""}
+        ${recipes.length ? recipes.map((r, i) => `
+          <div class="item preset">
+            <div class="item-text"><b>${esc(r.title)}</b><span>${esc(recipeSummary(r))}</span></div>
+            <button class="icon-btn" data-load="${i}" title="Load into the editor"><ha-icon icon="mdi:tray-arrow-down"></ha-icon></button>
+            <button class="icon-btn danger ${armed(`del:${r.title}`) ? "armed" : ""}" data-del="${i}"
+              title="${armed(`del:${r.title}`) ? "Tap again to delete" : "Delete"}"><ha-icon icon="mdi:delete-outline"></ha-icon></button>
+            <button class="icon-btn go" data-run="${i}" title="Start now" ${busy ? "disabled" : ""}><ha-icon icon="mdi:play"></ha-icon></button>
+          </div>`).join("") : `
+          <div class="item"><div class="item-text"><b>No presets yet</b>
+            <span>Set up the steps, then save them below.</span></div></div>`}
+        <div class="save-row">
+          <input class="feature name" id="preset-name" type="text" maxlength="60" value="${esc(name)}"
+            placeholder="Preset name" aria-label="Preset name">
+          <button class="feature action ${exists ? "stop" : "start"} ${armed("save") ? "armed" : ""} item-btn" id="save"
+            ${!m.connected || !name.trim() ? "disabled" : ""}>
+            <ha-icon icon="mdi:content-save-outline"></ha-icon>${exists ? (armed("save") ? "Tap to replace" : "Replace") : "Save"}</button>
+        </div>
+      </div>`;
+  }
+
+  // Two-tap actions (delete, replace): the first tap arms for 3 s.
+  _confirm(key, action) {
+    if (this._armed && this._armed.key === key && Date.now() < this._armed.until) {
+      this._armed = null;
+      action();
+    } else {
+      this._armed = { key, until: Date.now() + STOP_CONFIRM_MS };
+      setTimeout(() => this._render(), STOP_CONFIRM_MS + 50);
+    }
+    this._render();
+  }
+
+  _savePreset() {
+    const name = (this._presetName ?? programTitle(this._setup)).trim();
+    if (!name) return;
+    const exists = this._recipes().some((r) => r.title === name);
+    const save = () => {
+      this._call("mqtt", "publish", {
+        topic: `${this._config.mqtt_prefix}/cmd/save_recipe`,
+        payload: JSON.stringify({ title: name, stages: programStages(this._setup), ...(exists ? { replace: name } : {}) }),
+      });
+      this._presetName = undefined;
+    };
+    if (exists) this._confirm("save", save);
+    else { save(); this._render(); }
+  }
+
+  _loadPreset(r) {
+    const program = programFromStages(r.stages);
+    if (!program) return;
+    this._undo = { title: r.title, setup: this._setup };
+    this._setProgram(program);
+    setTimeout(() => { if (this._undo && this._undo.title === r.title) { this._undo = null; this._render(); } }, 15000);
   }
 
   _maintenanceView(m) {
@@ -465,7 +544,34 @@ class AnovaOvenCard extends HTMLElement {
       b.onclick = () => { if (Number(b.dataset.chip) !== this._setup.sel) this._update({ sel: Number(b.dataset.chip) }); };
     });
     if ($("preheat")) $("preheat").onclick = () => this._update({ preheat: !this._setup.preheat });
-    if ($("tools")) $("tools").onclick = () => { this._panel = this._panel ? null : "maintenance"; this._render(); };
+    if ($("tools")) $("tools").onclick = () => { this._panel = this._panel === "maintenance" ? null : "maintenance"; this._render(); };
+    if ($("presets")) $("presets").onclick = () => { this._panel = "presets"; this._undo = null; this._render(); };
+    if ($("panel-close")) $("panel-close").onclick = () => { this._panel = null; this._undo = null; this._presetName = undefined; this._render(); };
+    if ($("undo")) $("undo").onclick = () => { const u = this._undo; this._undo = null; if (u) this._setProgram(u.setup); };
+    if ($("save")) $("save").onclick = () => this._savePreset();
+    const nameInput = $("preset-name");
+    if (nameInput) {
+      nameInput.oninput = () => { this._presetName = nameInput.value; this._refreshSaveButton(); };
+      nameInput.onfocus = () => { this._typing = true; };
+      nameInput.onblur = () => { this._typing = false; if (this._dirty) { this._dirty = false; this._render(); } };
+      nameInput.onkeydown = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); nameInput.blur(); this._savePreset(); } };
+    }
+    const recipes = this._panel === "presets" ? this._recipes() : [];
+    root.querySelectorAll("[data-load]").forEach((b) => { b.onclick = () => this._loadPreset(recipes[Number(b.dataset.load)]); });
+    root.querySelectorAll("[data-run]").forEach((b) => {
+      b.onclick = async () => {
+        const r = recipes[Number(b.dataset.run)];
+        await this._call("select", "select_option", { entity_id: this._id("select", "recipe"), option: r.title });
+        await this._call("button", "press", { entity_id: this._id("button", "start") });
+        this._panel = null;
+        this._render();
+      };
+    });
+    root.querySelectorAll("[data-del]").forEach((b) => {
+      const r = recipes[Number(b.dataset.del)];
+      b.onclick = () => this._confirm(`del:${r.title}`, () => this._call("mqtt", "publish", {
+        topic: `${this._config.mqtt_prefix}/cmd/delete_recipe`, payload: r.title }));
+    });
     if ($("tools-close")) $("tools-close").onclick = () => { this._panel = null; this._render(); };
     if ($("prep")) $("prep").onclick = () => this._startPrep();
     root.querySelectorAll("[data-select]").forEach((b) => {
@@ -655,6 +761,57 @@ function modeIcon(key) {
   return `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">${inner}</svg>`;
 }
 
+// The oven stages for a program: an optional preheat, then one cook stage
+// per step.
+function programStages(p) {
+  const stages = [];
+  p.steps.forEach((st, i) => {
+    const base = stageBase(st);
+    if (i === 0 && p.preheat) stages.push({ ...base, kind: "preheat" });
+    const cook = { ...base, kind: "cook", user_action_required: i > 0 && st.waits };
+    if (st.end === "timer") Object.assign(cook, { timer_added: true, duration_secs: st.timer * 60 });
+    if (st.end === "probe") Object.assign(cook, { probe_added: true, probe_target_c: st.probe });
+    stages.push(cook);
+  });
+  return stages;
+}
+
+// A saved recipe's stages back into steps. A first preheat stage becomes
+// "Preheat on"; any later preheat becomes a step that holds until you move on.
+function programFromStages(stages) {
+  if (!Array.isArray(stages) || !stages.length) return null;
+  let preheat = false;
+  const steps = [];
+  stages.forEach((sg, i) => {
+    if (i === 0 && sg.kind === "preheat" && stages.length > 1) { preheat = true; return; }
+    const els = ["top", "rear", "bottom"].filter((e) => sg[`heating_element_${e}`]);
+    const mode = (MODES.find((md) => md.elements.length === els.length && md.elements.every((e) => els.includes(e))) || MODES[1]).key;
+    const st = {
+      ...DEFAULT_STEP,
+      mode,
+      sousVide: sg.temperature_bulbs_mode === "wet",
+      temp: Number(sg.temperature_c) || DEFAULT_STEP.temp,
+      steam: Math.round((Number(sg.steam_pct) || 0) / 10) * 10,
+      end: sg.timer_added && sg.duration_secs ? "timer" : sg.probe_added && sg.probe_target_c ? "probe" : "none",
+      timer: sg.duration_secs ? Math.max(1, Math.round(sg.duration_secs / 60)) : DEFAULT_STEP.timer,
+      probe: sg.probe_target_c || DEFAULT_STEP.probe,
+      waits: steps.length > 0 && !!sg.user_action_required,
+    };
+    normalizeStep(st);
+    steps.push(st);
+  });
+  return steps.length ? { steps: steps.slice(0, MAX_STEPS), sel: 0, preheat } : null;
+}
+
+function recipeSummary(r) {
+  const cooks = r.stages.filter((sg) => sg.kind !== "preheat");
+  const first = cooks[0] || r.stages[0];
+  const temp = first ? `${Math.round(first.temperature_c)}°` : "";
+  const sv = r.stages.some((sg) => sg.temperature_bulbs_mode === "wet") ? " · sous vide" : "";
+  const n = cooks.length > 1 ? ` · ${cooks.length} steps` : "";
+  return `${temp}${sv}${n}`;
+}
+
 function stageBase(st) {
   const elements = MODES.find((m) => m.key === st.mode).elements;
   return {
@@ -693,6 +850,8 @@ function startLabel(s) {
 // The steps row: one chip per step (tap to edit it), x on the selected
 // chip to remove it, and + to add a copy of the selected step.
 function stepChips(s, off) {
+  const book = `<button class="chip-step book" id="presets" title="Presets" aria-label="Presets" ${off ? "disabled" : ""}>
+    <ha-icon icon="mdi:book-open-variant"></ha-icon></button>`;
   const chip = (st, i) => {
     const on = i === s.sel;
     const icons = `${st.sousVide ? `<ha-icon icon="mdi:water-thermometer"></ha-icon>` : ""}${!st.sousVide && st.steam ? `<ha-icon icon="mdi:water-percent"></ha-icon>` : ""}${st.end === "timer" ? `<ha-icon icon="mdi:timer-outline"></ha-icon>` : st.end === "probe" ? `<ha-icon icon="mdi:thermometer-probe"></ha-icon>` : ""}${i > 0 && st.waits ? `<ha-icon icon="mdi:hand-back-right-outline"></ha-icon>` : ""}`;
@@ -704,6 +863,7 @@ function stepChips(s, off) {
   };
   return `
     <div class="feature steps" role="tablist" aria-label="Steps">
+      ${book}
       ${s.steps.map(chip).join("")}
       <button class="chip-step add" id="step-add" title="Add a step (a copy of step ${s.sel + 1})"
         ${off || s.steps.length >= MAX_STEPS ? "disabled" : ""}><ha-icon icon="mdi:plus"></ha-icon></button>
@@ -941,6 +1101,22 @@ const STYLE = `
   .icon-state.tools.on { background: rgba(var(--oven-rgb), .2); color: rgb(var(--oven-rgb)); }
 
   /* Maintenance panel: exactly the height of the five rows. */
+  .chip-step.book { padding: 0 8px; color: rgb(var(--oven-rgb)); }
+  .chip-step.book ha-icon { --mdc-icon-size: 18px; }
+  .item.preset { padding: 6px 6px 6px 12px; gap: 4px; }
+  .item.note { background: rgba(var(--oven-rgb), .12); }
+  .icon-btn { flex: none; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center;
+    color: var(--primary-text-color); }
+  .icon-btn ha-icon { --mdc-icon-size: 20px; }
+  .icon-btn:hover:not(:disabled) { background: rgba(var(--rgb-primary-text-color, 33, 33, 33), .08); }
+  .icon-btn.go { color: rgb(var(--oven-rgb)); }
+  .icon-btn.danger { color: var(--secondary-text-color); }
+  .icon-btn.danger.armed { background: var(--error-color, #db4437); color: #fff; }
+  .icon-btn:disabled { opacity: .4; }
+  .save-row { display: flex; gap: 8px; margin-top: auto; }
+  .name { flex: 1; min-width: 0; border: none; padding: 0 12px; background: var(--track); color: var(--primary-text-color);
+    font: inherit; font-size: 14px; outline: none; }
+  .name:focus { box-shadow: inset 0 0 0 2px rgba(var(--oven-rgb), .6); }
   .panel { height: calc(var(--h) * 6 + var(--gap) * 5); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
   .panel-head { display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-weight: 600;
     color: var(--primary-text-color); }
