@@ -1,0 +1,32 @@
+# Home Assistant app: the Anova oven server in local mode.
+# The oven connects on 4443. A UniFi destination-NAT rule sends the oven's
+# port 443 here, because Home Assistant itself owns 443 on this host.
+name: Anova Oven
+version: "0.1.0"
+slug: anova_oven
+description: Local control for the Anova Precision Oven v1, with no Anova cloud
+url: https://github.com/urosgruber/anova-oven
+arch:
+  - amd64
+init: false
+startup: application
+boot: auto
+# The built-in web page, for debugging. Admins only; the family uses the
+# dashboard card, which reads the MQTT entities.
+ingress: true
+ingress_port: 8080
+panel_icon: mdi:stove
+panel_title: Oven (debug)
+panel_admin: true
+ports:
+  4443/tcp: 4443
+  8080/tcp: null
+ports_description:
+  4443/tcp: Oven connection (TLS). The NAT rule sends the oven's port 443 here.
+  8080/tcp: Web page on the LAN without Home Assistant. Off by default; it has no login.
+services:
+  - mqtt:want
+options:
+  mqtt: true
+schema:
+  mqtt: bool

@@ -1,5 +1,6 @@
 // Shared helpers for the UI pages. Everything goes through the JSON API
-// under /api; temperatures there are Celsius.
+// under api/, relative to the page's <base> (Home Assistant ingress serves
+// the UI under a prefix); temperatures there are Celsius.
 
 async function api(method, path, body) {
   const options = { method, headers: {} };
@@ -7,7 +8,7 @@ async function api(method, path, body) {
     options.headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(body);
   }
-  const response = await fetch("/api" + path, options);
+  const response = await fetch("api" + path, options);
   const text = await response.text();
   if (!response.ok) {
     throw new Error(text || `${method} ${path}: HTTP ${response.status}`);
@@ -16,11 +17,11 @@ async function api(method, path, body) {
 }
 
 // The unit temperatures show in, chosen with the °F/°C switch in the header
-// and remembered in this browser. Fahrenheit until changed.
+// and remembered in this browser. Celsius until changed.
 const UNIT_KEY = "anova-oven-unit";
-let displayUnit = "F";
+let displayUnit = "C";
 try {
-  if (localStorage.getItem(UNIT_KEY) === "C") displayUnit = "C";
+  if (localStorage.getItem(UNIT_KEY) === "F") displayUnit = "F";
 } catch (_) {}
 
 // Wire up the header's unit switch. `onChange` re-renders the page.
