@@ -5,3 +5,7 @@ CLAUDE.md
 .DS_Store
 # Local captures, keys and firmware dumps; never commit
 scratchpad/
+
+# Home deployment: runtime data (recipes, history, current cook)
+/home/data/
+/home/.env

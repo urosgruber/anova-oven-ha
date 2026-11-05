@@ -4,16 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Recipe · Anova Oven</title>
-  <link rel="stylesheet" href="/ui/style.css">
-  <script src="/ui/common.js"></script>
-  <script src="/ui/steps.js"></script>
+  <base href="/">
+  <link rel="stylesheet" href="ui/style.css">
+  <script src="ui/common.js"></script>
+  <script src="ui/steps.js"></script>
 </head>
 <body>
   <header>
     <span class="brand">Anova Oven</span>
     <nav>
-      <a href="/">Status</a>
-      <a href="/recipes" aria-current="page">Recipes</a>
+      <a href="./">Status</a>
+      <a href="recipes" aria-current="page">Recipes</a>
     </nav>
     <div class="unit-switch" role="group" aria-label="Temperature unit">
       <button type="button" data-unit="F">°F</button>
@@ -43,7 +44,7 @@
         <div class="row">
           <button type="submit" id="save" class="primary">Save</button>
           <button type="button" id="start" hidden>Start</button>
-          <a class="button" href="/recipes">Cancel</a>
+          <a class="button" href="recipes">Cancel</a>
         </div>
         <button type="button" id="delete" class="danger" hidden>Delete recipe</button>
       </div>
@@ -53,7 +54,10 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const message = $("message");
-    const segment = decodeURIComponent(location.pathname.split("/").filter(Boolean)[1] || "new");
+    // The part after "recipes/" in the path. Home Assistant ingress puts a
+    // prefix in front, so count from the end, not the start.
+    const parts = location.pathname.split("/").filter(Boolean);
+    const segment = decodeURIComponent(parts[parts.lastIndexOf("recipes") + 1] || "new");
     const isNew = segment === "new";
     let recipe = null;
 
@@ -94,9 +98,9 @@
       try {
         if (isNew) {
           const created = await api("POST", "/recipes", body);
-          location.href = `/recipes/${encodeURIComponent(created.id)}?saved=1`;
+          location.href = `recipes/${encodeURIComponent(created.id)}?saved=1`;
         } else {
-          recipe = await api("PATCH", `/recipes/${encodeURIComponent(recipe.id)}`, body);
+          recipe = await api("PATCH", `recipes/${encodeURIComponent(recipe.id)}`, body);
           editor.setStages(recipe.stages);
           markSaved();
           showMessage(message, "Saved", "ok");
@@ -111,7 +115,7 @@
       clearMessage(message);
       try {
         await api("POST", "/start", { recipe_id: recipe.id });
-        location.href = "/";
+        location.href = "./";
       } catch (e) {
         showMessage(message, e.message);
       }
@@ -120,8 +124,8 @@
     $("delete").onclick = async () => {
       if (!confirm(`Delete “${recipe.title}”? This can't be undone.`)) return;
       try {
-        await api("DELETE", `/recipes/${encodeURIComponent(recipe.id)}`);
-        location.href = "/recipes";
+        await api("DELETE", `recipes/${encodeURIComponent(recipe.id)}`);
+        location.href = "recipes";
       } catch (e) {
         showMessage(message, e.message);
       }
@@ -131,7 +135,7 @@
       try {
         recipe = isNew
           ? { title: "", stages: [], source: "own" }
-          : await api("GET", `/recipes/${encodeURIComponent(segment)}`);
+          : await api("GET", `recipes/${encodeURIComponent(segment)}`);
       } catch (e) {
         showMessage(message, e.message);
         return;
