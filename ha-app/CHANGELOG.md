@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.10.2
+
+- The steam label is centred in its bar again.
+
 ## 0.10.1
 
 - Steam now sits next to the timer from a card width of about 394 px (was
