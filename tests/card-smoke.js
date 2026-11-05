@@ -79,6 +79,7 @@ c3.setConfig({});
 h = hass(); h.states[`sensor.${P}_recipes`] = st("2", { recipes }); c3.hass = h;
 c3._panel = "presets"; c3._render();
 const h3 = () => c3.shadowRoot.innerHTML;
+check("presets panel does not mark the cog", !/class="icon-state tools on"/.test(h3()));
 check("presets panel lists both recipes", h3().includes("Pizza") && h3().includes("Salmon") && h3().includes('data-run="1"'));
 check("summary shows steps and sous vide", h3().includes("250° · 2 steps") && h3().includes("52° · sous vide"));
 const before = JSON.stringify(c3._setup);

@@ -24,7 +24,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.9.0";
+const CARD_VERSION = "0.9.1";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
@@ -341,7 +341,7 @@ class AnovaOvenCard extends HTMLElement {
             title="${this._lampPending ? "Switching…" : lampShown ? "Light on" : "Light off"}" ${off ? "disabled" : ""}>
             <ha-icon icon="${lampShown ? "mdi:lightbulb-on" : "mdi:lightbulb-outline"}"></ha-icon>
           </button>
-          <button class="icon-state tools ${this._panel ? "on" : ""}" id="tools" title="Maintenance">
+          <button class="icon-state tools ${this._panel === "maintenance" ? "on" : ""}" id="tools" title="Maintenance">
             <ha-icon icon="mdi:cog-outline"></ha-icon>
           </button>
         </div>
