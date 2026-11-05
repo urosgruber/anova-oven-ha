@@ -49,9 +49,8 @@ door, light) it always shows the same six rows, so it never changes size:
    is 100 % and locked. During a cook, it shows the measured humidity.
 4. How the cook ends: until you stop, a timer, or a probe temperature,
    with - and + for the time or the probe target. Tap the value to type
-   it: minutes (90), 1h30 or 1:30, or the probe temperature. On a wide
-   card (about 460 px and more), steam sits in this row, next to the
-   timer.
+   it: minutes (90), 1h30 or 1:30, or the probe temperature. When the card is
+   about 394 px wide or more, steam sits in this row, next to the timer.
 5. Preheat and Bake (or Cook, with sous vide on). With Preheat on, the
    oven heats up first, and step 1 and its timer start at temperature.
    For step 2 and later, the left button chooses "Auto start" or
