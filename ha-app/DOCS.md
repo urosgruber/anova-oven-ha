@@ -51,8 +51,8 @@ door, light) it always shows the same six rows, so it never changes size:
    with - and + for the time or the probe target.
 5. Preheat and Bake (or Cook, with sous vide on). With Preheat on, the
    oven heats up first, and step 1 and its timer start at temperature.
-   For step 2 and later, the left button chooses "Starts by itself" or
-   "Waits for me" (the step waits until you tap Next stage).
+   For step 2 and later, the left button chooses "Auto start" or
+   "Wait for me" (the step waits until you tap Next stage).
    During a cook: Next stage when a stage waits for you, and Stop (tap
    twice).
 
