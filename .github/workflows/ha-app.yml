@@ -1,12 +1,17 @@
-# Ours, not upstream's: test the server, and on a v<version> tag build the
-# Home Assistant app image and push it to GHCR. Upstream's workflows are
-# disabled in this repo (gh workflow disable), so only this one runs.
+# Ours, not upstream's. Upstream's workflows are disabled in this repo
+# (gh workflow disable), so only this one runs.
+#
+# Every push and pull request: test the server.
+# A push to main whose ha-app/config.yaml has a version without a tag is a
+# release: build and push the image, tag v<version>, then move the
+# `release` branch to this commit. Home Assistant reads the app from the
+# `release` branch (repository URL ending in #release), so it only sees a
+# version after its image exists.
 name: HA app
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -28,36 +33,43 @@ jobs:
       - name: Test
         run: cargo test --locked -p anova-oven-server
 
-  image:
-    name: Build and push app image
+  release:
+    name: Release app image
     needs: test
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      - name: Check the tag matches ha-app/config.yaml
+      - name: Is this a new version?
         id: version
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          if ! grep -qx "version: \"${version}\"" ha-app/config.yaml; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match the version in ha-app/config.yaml"
-            exit 1
-          fi
+          version="$(sed -n 's/^version: "\(.*\)"$/\1/p' ha-app/config.yaml)"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+            echo "v${version} exists; nothing to release."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
 
-      - uses: docker/setup-buildx-action@v3
+      - if: steps.version.outputs.new == 'true'
+        uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
+      - if: steps.version.outputs.new == 'true'
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v6
+      - if: steps.version.outputs.new == 'true'
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ha-app/Dockerfile
@@ -68,3 +80,33 @@ jobs:
           push: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The `release` branch holds only what Home Assistant reads: the
+      # repository file and the app's config, docs and images. It is its own
+      # small history, so this push never carries workflow files (the job's
+      # token may not push those) and HA's store reload stays fast.
+      - name: Tag, and publish to Home Assistant
+        if: steps.version.outputs.new == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${VERSION}" -m "HA app ${VERSION}"
+          git push origin "v${VERSION}"
+
+          git worktree add --detach "$RUNNER_TEMP/release"
+          cd "$RUNNER_TEMP/release"
+          if git ls-remote --exit-code --heads origin release >/dev/null; then
+            git fetch origin release
+            git checkout -B release FETCH_HEAD
+          else
+            git checkout --orphan release
+          fi
+          git rm -rfq . >/dev/null 2>&1 || true
+          mkdir -p ha-app
+          cp "$GITHUB_WORKSPACE/repository.yaml" .
+          cp "$GITHUB_WORKSPACE"/ha-app/{config.yaml,DOCS.md,icon.png,logo.png} ha-app/
+          git add -A
+          git commit -m "HA app ${VERSION} (from ${GITHUB_SHA::7})"
+          git push origin release
