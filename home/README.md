@@ -82,7 +82,7 @@ changes 443 to 4443. See `ha-app/DOCS.md`.
 
 ## GitHub Actions
 
-Only our workflow `ha-app.yml` runs. Upstream's workflows (`pr.yml`,
+Only our workflow `ha-app.yml` runs. `.github/dependabot.yml` is deleted here: dependency updates come from upstream merges. If a merge brings it back, delete it again. Upstream's workflows (`pr.yml`,
 `release.yml`, `dependabot-auto-merge.yml`) are disabled on GitHub with
 `gh workflow disable`, so upstream merges do not turn them on again.
 
