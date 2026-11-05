@@ -35,13 +35,19 @@ type: custom:anova-oven-card
 title: Oven
 ```
 
-The card is laid out like the oven's handle: the heating mode (top, top
-and bottom, bottom, rear with fan), the temperature (tap the thermometer
-for sous vide), the timer and the steam, each with - and +, then Start.
-Hold - or + to change a value fast. With a timer, the oven preheats first
-and the timer starts at temperature. During a cook, the same strip shows
-the live values; - and + change the temperature and the timer of the
-running cook. Tap Stop twice to stop.
+The card follows Home Assistant's tile card. Under the header (oven state,
+door, light) it always shows the same four rows, so it never changes size:
+
+1. Heating mode: the handle's four modes (top, top and bottom, bottom,
+   rear with fan). During a cook, this row shows the progress.
+2. Temperature (`-  180 °C  +`) and the sous vide toggle.
+3. Timer and steam, each `-  value  +`. Hold - or + to change fast.
+4. Start. During a cook: Stop (tap twice), and Next stage when a stage
+   waits for you.
+
+With a timer, the oven preheats first and the timer starts at
+temperature. During a cook, - and + change the temperature and the timer
+of the running cook.
 
 ## Data
 
