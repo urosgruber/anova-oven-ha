@@ -20,4 +20,8 @@ else
   bashio::log.info "MQTT off"
 fi
 
+# Install the dashboard card and register it as a resource. A failure here
+# must not stop the server.
+python3 /register_card.py || bashio::log.warning "Could not install the dashboard card"
+
 exec /usr/bin/anova-oven-server

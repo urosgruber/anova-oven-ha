@@ -21,6 +21,25 @@ Supervisor gives the app its MQTT login, so you do not create a user.
 The sidebar page **Oven (debug)** is the server's built-in web page. Only
 admins see it. Use the dashboard card for daily cooking.
 
+## Dashboard card
+
+The app installs its own dashboard card at every start. It copies the card
+to `/config/www/anova-oven/` and registers the resource
+`/local/anova-oven/anova-oven-card.js?v=<version>`. You need no HACS. After
+an app update, reload the browser page once.
+
+Add the card to a dashboard:
+
+```yaml
+type: custom:anova-oven-card
+title: Oven
+```
+
+The card works like the oven's handle: set the temperature on the dial,
+choose Bake or Sous vide, the heating elements (one or two), steam and a
+timer, then Start. During a cook, change the temperature, add time, go to
+the next stage, or stop (tap Stop twice).
+
 ## Data
 
 Recipes, history and the current cook are stored in the app's `/data`

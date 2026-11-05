@@ -13,11 +13,14 @@
       --primary-text-color: #1c1f23; --secondary-text-color: #69737a;
       --card-background-color: #ffffff; --secondary-background-color: #eef1f3;
       --divider-color: #dde2e5; --error-color: #db4437; --page: #f3f5f6;
+      --rgb-primary-text-color: 28, 31, 35; --rgb-error-color: 219, 68, 55; --rgb-warning-color: 255, 166, 0;
+      --rgb-amber-color: 255, 193, 7; --rgb-disabled-color: 158, 158, 158; --warning-color: #e69500;
     }
     :root[data-theme="dark"] {
       --primary-text-color: #e6e9eb; --secondary-text-color: #9aa5ac;
       --card-background-color: #1d2226; --secondary-background-color: #2a3035;
       --divider-color: #384047; --error-color: #ef5350; --page: #111417;
+      --rgb-primary-text-color: 230, 233, 235; --rgb-error-color: 239, 83, 80;
     }
     body { margin: 0; background: var(--page); font-family: Roboto, "Helvetica Neue", Arial, sans-serif; color: var(--primary-text-color); }
     .bar { display: flex; flex-wrap: wrap; gap: 6px; padding: 16px; align-items: center; }
@@ -29,7 +32,7 @@
     .frame { width: 420px; max-width: 100%; }
     .frame.phone { width: 360px; }
     .frame h3 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--secondary-text-color); margin: 0 0 8px; }
-    ha-card { display: block; background: var(--card-background-color); border-radius: 12px;
+    ha-card { display: block; background: var(--card-background-color); border-radius: 12px; border: 1px solid var(--divider-color);
       box-shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04); }
     ha-icon { display: inline-flex; width: var(--mdc-icon-size, 24px); height: var(--mdc-icon-size, 24px);
       align-items: center; justify-content: center; font-size: calc(var(--mdc-icon-size, 24px) * .8); line-height: 1; }
@@ -51,7 +54,7 @@
       "mdi:thermometer-probe": "🌡", "mdi:door-open": "🚪", "mdi:door-closed": "▯", "mdi:skip-next": "⏭",
       "mdi:stop": "■", "mdi:timer-outline": "⏱", "mdi:wifi-off": "📵", "mdi:water-off": "🚱",
       "mdi:water-alert": "⚠", "mdi:pizza": "🍕", "mdi:bread-slice": "🍞", "mdi:food-steak": "🥩",
-      "mdi:fish": "🐟", "mdi:chef-hat": "👨‍🍳",
+      "mdi:fish": "🐟", "mdi:chef-hat": "👨‍🍳", "mdi:toaster-oven": "▭",
     };
     customElements.define("ha-icon", class extends HTMLElement {
       static get observedAttributes() { return ["icon"]; }
@@ -68,7 +71,7 @@
       connected: "on", cooking: "off", mode: "Idle", temperature: "23", target_temperature: "unknown",
       probe_temperature: "unknown", steam: "41", stage_ends_at: "unknown", stage: "unknown",
       stage_description: "unknown", current_recipe: "unknown", next_stage_ready: "off",
-      door: "off", lamp: "off", water_tank_empty: "off", descale_required: "off",
+      door: "off", lamp: "off", water_tank_empty: "off", descale_required: "off", set_timer: "unknown", cook: "cook_started",
     };
     const SCENARIOS = {
       "Idle": {},
@@ -76,14 +79,16 @@
         current_recipe: "Pizza", stage: "1 of 3", stage_description: "Preheat · 220 °C", lamp: "on", steam: "18" },
       "Cooking": { cooking: "on", mode: "Cooking", temperature: "219", target_temperature: "220",
         current_recipe: "Pizza", stage: "2 of 3", stage_description: "Bake · 220 °C · steam 30%",
-        stage_ends_at: in_(9 * 60 + 41), lamp: "on", steam: "30" },
+        stage_ends_at: in_(9 * 60 + 41), set_timer: "15", lamp: "on", steam: "30" },
       "Sous vide + probe": { cooking: "on", mode: "Cooking", temperature: "57", target_temperature: "58",
         probe_temperature: "51", current_recipe: "Salmon", stage: "1 of 1", stage_description: "Sous vide · 58 °C wet bulb",
-        stage_ends_at: in_(42 * 60), steam: "100" },
+        stage_ends_at: in_(42 * 60), set_timer: "60", steam: "100" },
       "Next stage ready": { cooking: "on", mode: "Cooking", temperature: "180", target_temperature: "180",
         current_recipe: "Bread", stage: "1 of 2", stage_description: "Steam bake · 180 °C", next_stage_ready: "on" },
       "Door open": { cooking: "on", mode: "Cooking", temperature: "171", target_temperature: "200", door: "on",
-        current_recipe: "Toast", stage: "1 of 1", stage_description: "Toast · 200 °C", stage_ends_at: in_(150) },
+        current_recipe: "Toast", stage: "1 of 1", stage_description: "Toast · 200 °C", stage_ends_at: in_(150), set_timer: "8" },
+      "Done (still heating)": { cooking: "on", mode: "Cooking", temperature: "200", target_temperature: "200",
+        current_recipe: "Toast", stage: "1 of 1", stage_description: "Toast · 200 °C", cook: "cook_done" },
       "Water + descale": { water_tank_empty: "on", descale_required: "on" },
       "Offline": { connected: "off", temperature: "unknown", steam: "unknown" },
     };
@@ -96,7 +101,8 @@
       { name: "Salmon", recipe: "Salmon", icon: "mdi:fish" },
     ];
     const DOMAIN = { connected: "binary_sensor", cooking: "binary_sensor", next_stage_ready: "binary_sensor",
-      door: "binary_sensor", water_tank_empty: "binary_sensor", descale_required: "binary_sensor", lamp: "light" };
+      door: "binary_sensor", water_tank_empty: "binary_sensor", descale_required: "binary_sensor", lamp: "light",
+      set_timer: "number" };
 
     let current = "Cooking";
     const cards = [document.getElementById("a"), document.getElementById("b")];
@@ -107,8 +113,10 @@
       const values = { ...base, ...SCENARIOS[current] };
       const states = {};
       for (const [k, v] of Object.entries(values)) {
+        if (k === "cook") continue;
         states[`${DOMAIN[k] || "sensor"}.${P}_${k}`] = { state: v, attributes: {} };
       }
+      states[`event.${P}_cook`] = { state: new Date().toISOString(), attributes: { event_type: values.cook } };
       states[`select.${P}_recipe`] = { state: "Pizza", attributes: { options: recipes } };
       return {
         states,

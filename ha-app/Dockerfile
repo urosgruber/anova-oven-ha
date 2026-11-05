@@ -18,13 +18,18 @@ RUN cargo build --release --locked -p anova-oven-server
 
 FROM ${BUILD_FROM}
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+ && apt-get install -y --no-install-recommends ca-certificates libssl3 python3 python3-websocket \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/anova-oven-server /usr/bin/anova-oven-server
+# The dashboard card ships with the app. A card-only change reuses the
+# cached Rust build above, so it releases in about a minute.
+COPY dist/anova-oven-card.js /usr/share/anova-oven/anova-oven-card.js
+COPY ha-app/register_card.py /register_card.py
 COPY ha-app/run.sh /run.sh
 RUN chmod a+x /run.sh
 
 ARG BUILD_VERSION=dev
+ENV CARD_VERSION=${BUILD_VERSION}
 LABEL io.hass.version="${BUILD_VERSION}" \
       io.hass.type="addon" \
       io.hass.arch="amd64" \
