@@ -10,7 +10,7 @@ code plus our own changes.
 
 | Remote | Repo | Use |
 |---|---|---|
-| `origin` | `urosgruber/anova-oven-local` | Push our work here. |
+| `origin` | `urosgruber/anova-oven-ha` | Push our work here. |
 | `upstream` | `robdimsdale/anova-oven-rs` | Fetch only. Push is disabled. |
 
 ## Get upstream changes
@@ -59,17 +59,32 @@ unplug the oven for 10 seconds.
 
 ## Home Assistant app
 
-`ha-app/` packages the server as a local Home Assistant app (amd64). The
-HA host builds it from source.
+This repo is also a Home Assistant app repository (`repository.yaml`). The
+app is in `ha-app/`.
 
-1. Mount the Samba share `addons`, or use the SSH app.
-2. Run `home/deploy-ha-app.sh /Volumes/addons` (or `ssh:<host>`).
-3. In HA: Settings → Apps → App store → ⋮ → Check for updates. Install
-   "Anova Oven" from "Local apps".
+**Install, once:**
+
+1. In HA: Settings → Apps → App store → ⋮ → Repositories. Add
+   `https://github.com/urosgruber/anova-oven-ha`.
+2. Install **Anova Oven**.
+
+**Release a new version:**
+
+1. Raise `version` in `ha-app/config.yaml` and commit.
+2. Tag and push: `git tag v<version> && git push origin v<version>`.
+3. GitHub Actions (`.github/workflows/ha-app.yml`) tests the server, builds
+   the image and pushes `ghcr.io/urosgruber/anova-oven-ha-amd64:<version>`.
+4. HA shows the update. Click **Update**.
 
 The oven still connects on port 443, and HA owns 443. The app listens on
-4443. A UniFi destination-NAT rule (only for the oven's IP address)
+4443. A gateway destination-NAT rule, only for the oven's IP address,
 changes 443 to 4443. See `ha-app/DOCS.md`.
+
+## GitHub Actions
+
+Only our workflow `ha-app.yml` runs. Upstream's workflows (`pr.yml`,
+`release.yml`, `dependabot-auto-merge.yml`) are disabled on GitHub with
+`gh workflow disable`, so upstream merges do not turn them on again.
 
 ## Wi-Fi setup without the Anova app
 

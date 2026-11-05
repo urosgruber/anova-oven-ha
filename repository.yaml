@@ -1,0 +1,5 @@
+# Home Assistant app repository. Add this repo's URL in
+# Settings → Apps → App store → ⋮ → Repositories. The app is in ha-app/.
+name: Anova Oven (local control)
+url: https://github.com/urosgruber/anova-oven-ha
+maintainer: Uros Gruber
