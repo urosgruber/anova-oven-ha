@@ -41,14 +41,18 @@ door, light) it always shows the same five rows, so it never changes size:
 1. Heating elements: any one or two of top, bottom and rear (six choices).
    During a cook, this row shows the progress.
 2. Temperature: drag the slider, or tap - and +. The toggle next to it
-   switches sous vide on (25-100 °C, steam 100 %) or off (bake).
-3. How the cook ends: until you stop, a timer, or a probe temperature,
+   switches sous vide on (25-100 °C) or off (bake).
+3. Steam: drag the light-blue slider (10 % steps). With sous vide on, it
+   is 100 % and locked. During a cook, it shows the measured humidity.
+4. How the cook ends: until you stop, a timer, or a probe temperature,
    with - and + for the time or the probe target.
-4. Steam (- and +), and the Preheat button. With Preheat on, the oven
-   heats up first, and the cook and its timer start at temperature. With
-   Preheat off, the cook and its timer start at once.
-5. Bake (or Cook, with sous vide on). During a cook: Stop (tap twice), and
-   Next stage when a stage waits for you.
+5. Preheat and Bake (or Cook, with sous vide on). With Preheat on, the
+   oven heats up first, and the cook and its timer start at temperature.
+   During a cook: Next stage when a stage waits for you, and Stop (tap
+   twice).
+
+During a cook, the temperature slider and - and + change the running
+cook's temperature, and - and + change a running timer.
 
 The header shows the door, the probe (orange while plugged in; its
 temperature is in the status line), the light, and a wrench. "End by
