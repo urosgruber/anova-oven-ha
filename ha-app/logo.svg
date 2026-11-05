@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 250 100" width="250" height="100">
+  <!-- Source for logo.png: the icon plus the app name. -->
+  <image href="icon.svg" xlink:href="icon.svg" x="0" y="4" width="92" height="92"/>
+  <text x="100" y="50" font-family="Helvetica, Arial, sans-serif" font-size="23" font-weight="700" fill="#F26B1D">Anova Oven</text>
+  <text x="101" y="74" font-family="Helvetica, Arial, sans-serif" font-size="15" fill="#8A99A3">local control</text>
+</svg>

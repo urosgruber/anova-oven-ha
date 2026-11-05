@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Source for icon.png. A generic countertop combi oven, not Anova's logo. -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4A5A64"/>
+      <stop offset="1" stop-color="#2C363D"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.95" r="0.9">
+      <stop offset="0" stop-color="#FFB547"/>
+      <stop offset="0.45" stop-color="#F26B1D"/>
+      <stop offset="1" stop-color="#3A1A0C"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Steam -->
+  <g fill="none" stroke="#B8C4CC" stroke-width="4" stroke-linecap="round">
+    <path d="M40 23 C 34 17, 46 13, 40 6"/>
+    <path d="M56 23 C 50 17, 62 13, 56 6"/>
+    <path d="M72 23 C 66 17, 78 13, 72 6"/>
+  </g>
+
+  <!-- Body -->
+  <rect x="8" y="28" width="112" height="76" rx="14" fill="url(#body)"/>
+  <rect x="8" y="28" width="112" height="8" rx="4" fill="#5E707B" opacity="0.6"/>
+
+  <!-- Door handle -->
+  <rect x="20" y="33" width="68" height="5" rx="2.5" fill="#D5DDE2"/>
+
+  <!-- Window with the warm glow and a rack -->
+  <rect x="18" y="42" width="72" height="52" rx="8" fill="url(#glow)" stroke="#1C2328" stroke-width="3"/>
+  <line x1="24" y1="78" x2="84" y2="78" stroke="#FFD9A0" stroke-width="2" opacity="0.7"/>
+  <rect x="34" y="70" width="40" height="8" rx="4" fill="#7A3A12" opacity="0.85"/>
+
+  <!-- Control panel: dial and display -->
+  <circle cx="105" cy="56" r="8" fill="#1F272C" stroke="#9FB0BA" stroke-width="2"/>
+  <line x1="105" y1="56" x2="105" y2="49.5" stroke="#E6ECEF" stroke-width="2.5" stroke-linecap="round"/>
+  <rect x="97" y="72" width="16" height="9" rx="2" fill="#1F272C"/>
+  <rect x="99.5" y="74.5" width="11" height="4" rx="1" fill="#5CD3FF"/>
+
+  <!-- Feet -->
+  <rect x="20" y="104" width="14" height="6" rx="2" fill="#1C2328"/>
+  <rect x="94" y="104" width="14" height="6" rx="2" fill="#1C2328"/>
+</svg>
