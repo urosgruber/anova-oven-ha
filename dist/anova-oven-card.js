@@ -7,9 +7,9 @@
  * features (42 px high, 12 px radius, 12 px gaps):
  *   1. heating elements: any one or two (six choices; while cooking: progress)
  *   2. temperature: a slider with - and +, and the sous vide toggle
- *   3. how the cook ends: until you stop, timer or probe, with its value
- *   4. steam, and the preheat toggle
- *   5. Start (while cooking: Stop, and Next stage when a stage waits)
+ *   3. steam: a light-blue slider (100 % and locked with sous vide)
+ *   4. how the cook ends: until you stop, timer or probe, with its value
+ *   5. Preheat and Bake / Cook (while cooking: Next stage and Stop)
  * The same rows show in every state, so the card never changes size. The
  * wrench in the header swaps the rows for a maintenance panel of the same
  * height (heating element prep, descale, water tank).
@@ -24,7 +24,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.6.0";
+const CARD_VERSION = "0.7.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
@@ -306,6 +306,8 @@ class AnovaOvenCard extends HTMLElement {
             </button>
           </div>
 
+          ${slider("steam", steamFraction(m, s), steamLabel(m, s), off || live || s.sousVide, { buttons: false, tone: "steam" })}
+
           <div class="pair end">
             ${select("end", ENDS.map((e) => ({ key: e.key, label: e.key === "probe" && m.probe === null ? "Probe (plug it in first)" : e.label,
               html: `<ha-icon icon="${e.icon}"></ha-icon>`, disabled: e.key === "probe" && m.probe === null && s.end !== "probe" })),
@@ -313,24 +315,18 @@ class AnovaOvenCard extends HTMLElement {
             ${stepper("end", endValue(m, s), endDisabled(m, s, off))}
           </div>
 
-          <div class="pair wide">
-            ${stepper("steam", live ? (m.steam === null ? "—" : `${Math.round(m.steam)} % steam`)
-              : (s.sousVide ? "100 % steam" : s.steam ? `${s.steam} % steam` : "No steam"),
-              off || live || s.sousVide, "mdi:water-percent")}
-            <button class="feature toggle labeled ${!live && s.preheat ? "on preheat" : ""}" id="preheat"
-              title="${s.preheat ? "Preheat on: the oven heats up first; the cook and its timer start at temperature"
-                : "Preheat off: the cook and its timer start now"}" aria-pressed="${s.preheat}" ${off || live ? "disabled" : ""}>
-              <ha-icon icon="${s.preheat ? "mdi:checkbox-marked-circle-outline" : "mdi:checkbox-blank-circle-outline"}"></ha-icon><span>Preheat</span>
-            </button>
-          </div>
-
-          <div class="pair">
-            ${live && m.nextReady ? `<button class="feature action" id="next"><ha-icon icon="mdi:skip-next"></ha-icon>Next stage</button>` : ""}
-            ${live
-              ? `<button class="feature action stop ${armed ? "armed" : ""}" id="stop">
-                   <ha-icon icon="mdi:stop"></ha-icon>${armed ? "Tap again to stop" : "Stop"}</button>`
-              : `<button class="feature action start" id="start" ${off || needsProbe ? "disabled" : ""}>
-                   <ha-icon icon="mdi:play"></ha-icon>${s.sousVide ? "Cook" : "Bake"}</button>`}
+          <div class="pair go">
+            ${live ? `
+              ${m.nextReady ? `<button class="feature action" id="next"><ha-icon icon="mdi:skip-next"></ha-icon>Next stage</button>` : ""}
+              <button class="feature action stop ${armed ? "armed" : ""}" id="stop">
+                <ha-icon icon="mdi:stop"></ha-icon>${armed ? "Tap again to stop" : "Stop"}</button>` : `
+              <button class="feature toggle labeled ${s.preheat ? "on preheat" : ""}" id="preheat"
+                title="${s.preheat ? "Preheat on: the oven heats up first; the cook and its timer start at temperature"
+                  : "Preheat off: the cook and its timer start now"}" aria-pressed="${s.preheat}" ${off ? "disabled" : ""}>
+                <ha-icon icon="${s.preheat ? "mdi:checkbox-marked-circle-outline" : "mdi:checkbox-blank-circle-outline"}"></ha-icon><span>Preheat</span>
+              </button>
+              <button class="feature action start" id="start" ${off || needsProbe ? "disabled" : ""}>
+                <ha-icon icon="mdi:play"></ha-icon>${s.sousVide ? "Cook" : "Bake"}</button>`}
           </div>
           `}
         </div>
@@ -423,34 +419,42 @@ class AnovaOvenCard extends HTMLElement {
       };
     });
 
-    // The temperature slider: drag for big changes; it commits on release.
-    const track = $("temp-track");
-    if (track && !temp.disabled) {
-      const step = m.cooking ? 1 : this._setup.sousVide ? 0.5 : 1;
-      const valueAt = (ev) => {
-        const r = track.getBoundingClientRect();
-        const f = clamp((ev.clientX - r.left) / r.width, 0, 1);
-        return clamp(Math.round((temp.lo + f * (temp.hi - temp.lo)) / step) * step, temp.lo, temp.hi);
-      };
-      const show = (v) => {
-        $("temp-fill").style.width = pct((v - temp.lo) / (temp.hi - temp.lo));
-        $("temp-value").textContent = fmtTemp(v, " °C");
-      };
-      track.onpointerdown = (ev) => {
-        ev.preventDefault();
-        track.setPointerCapture(ev.pointerId);
+    // Sliders: drag for big changes; the value commits on release.
+    this._bindDrag("temp", { ...temp, step: m.cooking ? 1 : this._setup.sousVide ? 0.5 : 1,
+      label: (v) => fmtTemp(v, " °C"),
+      commit: (v) => (m.cooking ? this._setTarget(v) : this._update({ temp: v })) });
+    this._bindDrag("steam", { lo: 0, hi: 100, step: 10, disabled: m.cooking || !m.connected || this._setup.sousVide,
+      label: (v) => steamLabel(m, { ...this._setup, steam: v }),
+      commit: (v) => this._update({ steam: v }) });
+  }
+
+  _bindDrag(what, o) {
+    const $ = (id) => this.shadowRoot.getElementById(id);
+    const track = $(`${what}-track`);
+    if (!track || o.disabled) return;
+    const valueAt = (ev) => {
+      const r = track.getBoundingClientRect();
+      const f = clamp((ev.clientX - r.left) / r.width, 0, 1);
+      return clamp(Math.round((o.lo + f * (o.hi - o.lo)) / o.step) * o.step, o.lo, o.hi);
+    };
+    const show = (v) => {
+      $(`${what}-fill`).style.width = pct((v - o.lo) / (o.hi - o.lo));
+      $(`${what}-value`).textContent = o.label(v);
+    };
+    track.onpointerdown = (ev) => {
+      ev.preventDefault();
+      track.setPointerCapture(ev.pointerId);
+      this._holding = true;
+      let value = valueAt(ev);
+      show(value);
+      track.onpointermove = (e) => { value = valueAt(e); show(value); };
+      this._endHold(() => {
+        track.onpointermove = null;
+        // _update re-renders after the hold ends; skip its own render here.
         this._holding = true;
-        let value = valueAt(ev);
-        show(value);
-        track.onpointermove = (e) => { value = valueAt(e); show(value); };
-        this._endHold(() => {
-          track.onpointermove = null;
-          if (m.cooking) this._setTarget(value);
-          else this._setup = { ...this._setup, temp: value };
-          saveSetup(this._setup);
-        });
-      };
-    }
+        o.commit(value);
+      });
+    };
   }
 
   // Run `cleanup`, then re-render, when the pointer is released anywhere.
@@ -474,7 +478,9 @@ class AnovaOvenCard extends HTMLElement {
     const fill = this.shadowRoot.getElementById("temp-fill");
     if (fill) fill.style.width = pct((s.temp - lo) / (hi - lo));
     set("end-value", endValue(m, s));
-    set("steam-value", s.sousVide ? "100 % steam" : s.steam ? `${s.steam} % steam` : "No steam");
+    set("steam-value", steamLabel(m, s));
+    const steamFill = this.shadowRoot.getElementById("steam-fill");
+    if (steamFill) steamFill.style.width = pct(steamFraction(m, s));
   }
 
   _renderLive() {
@@ -514,16 +520,28 @@ function stepper(what, value, disabled, icon) {
 
 // HA's slider feature with - and + at the ends: drag for big changes,
 // tap - or + for one step.
-function slider(what, f, label, disabled) {
+function slider(what, f, label, disabled, opts = {}) {
+  const buttons = opts.buttons !== false;
   return `
-    <div class="feature slider ${disabled ? "disabled" : ""}">
-      <button class="pm" data-step="${what}:-1" aria-label="Lower" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:minus"></ha-icon></button>
+    <div class="feature slider ${opts.tone || ""} ${buttons ? "" : "bare"} ${disabled ? "disabled" : ""}">
+      ${buttons ? `<button class="pm" data-step="${what}:-1" aria-label="Lower" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:minus"></ha-icon></button>` : ""}
       <div class="track" id="${what}-track" role="slider" aria-valuetext="${esc(label)}">
         <div class="fill" id="${what}-fill" style="width:${pct(f)}"></div>
         <span class="track-value" id="${what}-value">${esc(label)}</span>
       </div>
-      <button class="pm" data-step="${what}:1" aria-label="Higher" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:plus"></ha-icon></button>
+      ${buttons ? `<button class="pm" data-step="${what}:1" aria-label="Higher" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:plus"></ha-icon></button>` : ""}
     </div>`;
+}
+
+function steamFraction(m, s) {
+  if (m.cooking) return (m.steam || 0) / 100;
+  return (s.sousVide ? 100 : s.steam) / 100;
+}
+
+function steamLabel(m, s) {
+  if (m.cooking) return m.steam === null ? "Steam —" : `Steam ${Math.round(m.steam)} %`;
+  if (s.sousVide) return "Steam 100 % (sous vide)";
+  return s.steam ? `Steam ${s.steam} %` : "No steam";
 }
 
 function endValue(m, s) {
@@ -545,16 +563,26 @@ function endDisabled(m, s, off) {
   return s.end === "none";
 }
 
-// Icons for the element choices: a square with the heated side drawn bold,
-// and a fan for the rear element.
+// Icons for the element choices, like the handle: a box with the heated
+// side drawn bold for top and bottom, and a plain fan for the rear element.
+// With the rear, a short line above or below the fan adds top or bottom.
 function modeIcon(key) {
   const box = `<rect x="4" y="4" width="16" height="16" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".55"/>`;
   const top = `<rect x="4" y="4" width="16" height="3.2" rx="1.2" fill="currentColor"/>`;
   const bottom = `<rect x="4" y="16.8" width="16" height="3.2" rx="1.2" fill="currentColor"/>`;
-  const fan = `<circle cx="12" cy="12" r="4.4" fill="none" stroke="currentColor" stroke-width="1.7"/>
-    <path d="M12 12 L12 8.4 M12 12 L15.1 13.8 M12 12 L8.9 13.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>`;
-  const inner = { top, bottom, top_bottom: top + bottom, rear: fan, rear_top: fan + top, rear_bottom: fan + bottom }[key];
-  return `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">${box}${inner}</svg>`;
+  const fan = (cy, r) => `<circle cx="12" cy="${cy}" r="${r}" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    <path d="M12 ${cy} L12 ${cy - r * 0.62} M12 ${cy} L${12 + r * 0.54} ${cy + r * 0.31} M12 ${cy} L${12 - r * 0.54} ${cy + r * 0.31}"
+      stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>`;
+  const line = (y) => `<rect x="6" y="${y}" width="12" height="2.6" rx="1.3" fill="currentColor"/>`;
+  const inner = {
+    top: box + top,
+    bottom: box + bottom,
+    top_bottom: box + top + bottom,
+    rear: fan(12, 7),
+    rear_top: line(3) + fan(14, 5.6),
+    rear_bottom: fan(10, 5.6) + line(18.4),
+  }[key];
+  return `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">${inner}</svg>`;
 }
 
 function setupTitle(s) {
@@ -722,6 +750,10 @@ const STYLE = `
   .track { position: relative; flex: 1; align-self: stretch; margin: 6px 0; border-radius: 8px; overflow: hidden;
     background: rgba(var(--oven-rgb), .14); cursor: pointer; touch-action: none; user-select: none; }
   .slider.disabled .track { cursor: default; }
+  .slider.bare { background: none; }
+  .slider.bare .track { margin: 0; border-radius: var(--r); }
+  .slider.steam .track { background: rgba(var(--rgb-light-blue-color, 3, 169, 244), .14); }
+  .slider.steam .fill { background: rgba(var(--rgb-light-blue-color, 3, 169, 244), .45); }
   .fill { position: absolute; inset: 0 auto 0 0; background: rgba(var(--oven-rgb), .45); border-radius: 8px 0 0 8px; }
   .fill::after { content: ""; position: absolute; right: 4px; top: 50%; width: 4px; height: 16px; margin-top: -8px;
     border-radius: 2px; background: #fff; box-shadow: 0 0 2px rgba(0, 0, 0, .3); }
@@ -732,7 +764,7 @@ const STYLE = `
   .toggle { display: grid; place-items: center; background: var(--track); color: var(--secondary-text-color); }
   .toggle.on { background: rgb(var(--rgb-blue-color, 33, 150, 243)); color: #fff; }
   .toggle.on.preheat { background: rgb(var(--oven-rgb)); }
-  .pair.wide > .toggle.labeled { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 0 14px;
+  .pair.go > .toggle.labeled { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 0 14px;
     font-size: 14px; font-weight: 500; }
 
   /* Probe status: orange while plugged in. */
