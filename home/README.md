@@ -76,6 +76,12 @@ app is in `ha-app/`.
    the image and pushes `ghcr.io/urosgruber/anova-oven-ha-amd64:<version>`.
 4. HA shows the update. Click **Update**.
 
+The app also ships the dashboard card (`dist/anova-oven-card.js`) and
+registers it in HA at every start, so one app version covers the server and
+the card. A card-only change reuses the cached Rust build, so its release
+takes about a minute. `dist/preview.html` shows the card with fake data in
+a browser.
+
 The oven still connects on port 443, and HA owns 443. The app listens on
 4443. A gateway destination-NAT rule, only for the oven's IP address,
 changes 443 to 4443. See `ha-app/DOCS.md`.
