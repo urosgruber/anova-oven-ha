@@ -5,7 +5,7 @@ name: Anova Oven
 version: "0.1.0"
 slug: anova_oven
 description: Local control for the Anova Precision Oven v1, with no Anova cloud
-url: https://github.com/urosgruber/anova-oven
+url: https://github.com/urosgruber/anova-oven-local
 arch:
   - amd64
 init: false
