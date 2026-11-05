@@ -24,7 +24,7 @@
     },
     "state_topic": "anova/oven/state",
     "unique_id": "anova_oven_connected",
-    "value_template": "{{ 'ON' if value_json.connected else 'OFF' }}"
+    "value_template": "{{ 'ON' if value_json.get('connected') else 'OFF' }}"
   },
   "homeassistant/binary_sensor/anova_oven/cooking/config": {
     "availability": [
@@ -33,7 +33,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -55,7 +55,7 @@
     },
     "state_topic": "anova/oven/state",
     "unique_id": "anova_oven_cooking",
-    "value_template": "{{ 'ON' if value_json.mode != 'idle' else 'OFF' }}"
+    "value_template": "{{ 'ON' if value_json.get('mode', 'idle') not in ['idle', 'unknown'] else 'OFF' }}"
   },
   "homeassistant/binary_sensor/anova_oven/descale_required/config": {
     "availability": [
@@ -64,7 +64,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -86,7 +86,7 @@
     },
     "state_topic": "anova/oven/state",
     "unique_id": "anova_oven_descale_required",
-    "value_template": "{{ 'ON' if value_json.boiler_descale_required else 'OFF' }}"
+    "value_template": "{{ 'ON' if value_json.get('boiler_descale_required') else 'OFF' }}"
   },
   "homeassistant/binary_sensor/anova_oven/door/config": {
     "availability": [
@@ -95,7 +95,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -117,7 +117,7 @@
     },
     "state_topic": "anova/oven/state",
     "unique_id": "anova_oven_door",
-    "value_template": "{{ 'ON' if value_json.door_open else 'OFF' }}"
+    "value_template": "{{ 'ON' if value_json.get('door_open') else 'OFF' }}"
   },
   "homeassistant/binary_sensor/anova_oven/next_stage_ready/config": {
     "availability": [
@@ -126,7 +126,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -156,7 +156,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -178,7 +178,7 @@
     },
     "state_topic": "anova/oven/state",
     "unique_id": "anova_oven_water_tank_empty",
-    "value_template": "{{ 'ON' if value_json.water_tank_empty else 'OFF' }}"
+    "value_template": "{{ 'ON' if value_json.get('water_tank_empty') else 'OFF' }}"
   },
   "homeassistant/button/anova_oven/next_stage/config": {
     "availability": [
@@ -187,7 +187,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       },
       {
         "topic": "anova/oven/next_stage/availability"
@@ -219,7 +219,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -248,7 +248,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -312,7 +312,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -335,7 +335,7 @@
     "payload_off": "OFF",
     "payload_on": "ON",
     "state_topic": "anova/oven/state",
-    "state_value_template": "{{ 'ON' if value_json.lamp_on else 'OFF' }}",
+    "state_value_template": "{{ 'ON' if value_json.get('lamp_on') else 'OFF' }}",
     "unique_id": "anova_oven_lamp"
   },
   "homeassistant/number/anova_oven/set_temperature/config": {
@@ -345,7 +345,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -382,7 +382,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -410,7 +410,7 @@
     "step": 1,
     "unique_id": "anova_oven_set_timer",
     "unit_of_measurement": "min",
-    "value_template": "{{ (value_json.timer_total_secs / 60) | round(0) | int }}"
+    "value_template": "{% set s = value_json.get('timer_total_secs') %}{{ (s / 60) | round(0) | int if s else 'None' }}"
   },
   "homeassistant/select/anova_oven/recipe/config": {
     "availability": [
@@ -449,7 +449,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -479,7 +479,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -509,7 +509,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -568,7 +568,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -598,7 +598,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -628,7 +628,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -659,7 +659,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -692,7 +692,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -725,7 +725,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -758,7 +758,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
@@ -790,7 +790,7 @@
       },
       {
         "topic": "anova/oven/state",
-        "value_template": "{{ 'online' if value_json.connected else 'offline' }}"
+        "value_template": "{{ 'online' if value_json.get('connected') else 'offline' }}"
       }
     ],
     "availability_mode": "all",
