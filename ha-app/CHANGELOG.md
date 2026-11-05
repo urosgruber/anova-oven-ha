@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.0
+
+- Steps: a row of step chips above the controls. Tap a chip to edit that
+  step, + to add a step (a copy of the selected one), and x on the
+  selected chip to remove it. Up to 8 steps.
+- For step 2 and later, the button next to Start chooses if the step
+  starts by itself or waits until you tap Next stage. Step 1 keeps
+  Preheat there.
+- During a cook, the chips show the stages: done ones ticked, the running
+  one highlighted.
+- The maintenance button is a cog.
+- Your last setup becomes step 1.
+
 ## 0.7.2
 
 - Fix taps that did nothing, so that a button needed two or three taps.

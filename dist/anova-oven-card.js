@@ -24,7 +24,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.7.2";
+const CARD_VERSION = "0.8.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
@@ -52,10 +52,16 @@ const ENDS = [
   { key: "probe", label: "Probe", icon: "mdi:thermometer-probe" },
 ];
 const LIMITS = { dry: [25, 250], wet: [25, 100], probe: [1, 100] };
-const DEFAULT_SETUP = {
+// A program is a list of steps. Each step is one oven stage; `waits` makes a
+// step after the first wait for Next stage. Preheat (before step 1) and the
+// selected step are program-wide.
+const STEP_KEYS = ["mode", "sousVide", "temp", "steam", "end", "timer", "probe", "waits"];
+const DEFAULT_STEP = {
   mode: "top_bottom", sousVide: false, temp: 180, steam: 0,
-  end: "none", timer: 30, probe: 55, preheat: true,
+  end: "none", timer: 30, probe: 55, waits: false,
 };
+const DEFAULT_SETUP = { steps: [DEFAULT_STEP], sel: 0, preheat: true };
+const MAX_STEPS = 8;
 
 class AnovaOvenCard extends HTMLElement {
   static getStubConfig() {
@@ -110,7 +116,7 @@ class AnovaOvenCard extends HTMLElement {
   }
 
   getGridOptions() {
-    return { columns: 6, min_columns: 6, rows: 6, min_rows: 6 };
+    return { columns: 6, min_columns: 6, rows: "auto" };
   }
 
   connectedCallback() {
@@ -151,31 +157,51 @@ class AnovaOvenCard extends HTMLElement {
     return this._hass.callService(domain, service, data);
   }
 
+  // The selected step, with the program-wide fields next to it.
+  _view() {
+    const p = this._setup;
+    return { ...p.steps[p.sel], preheat: p.preheat, sel: p.sel, steps: p.steps };
+  }
+
   // --- Actions ------------------------------------------------------------
 
   _start() {
-    const s = this._setup;
-    const elements = MODES.find((m) => m.key === s.mode).elements;
-    const base = {
-      temperature_c: s.temp,
-      temperature_bulbs_mode: s.sousVide ? "wet" : "dry",
-      steam_pct: s.sousVide ? 100 : s.steam,
-      fan_speed: 100,
-      heating_element_top: elements.includes("top"),
-      heating_element_rear: elements.includes("rear"),
-      heating_element_bottom: elements.includes("bottom"),
-    };
-    const cook = { ...base, kind: "cook" };
-    if (s.end === "timer") Object.assign(cook, { timer_added: true, duration_secs: s.timer * 60 });
-    if (s.end === "probe") Object.assign(cook, { probe_added: true, probe_target_c: s.probe });
-    // A preheat ends at temperature; the cook stage then starts by itself.
-    const stages = s.preheat
-      ? [{ ...base, kind: "preheat" }, { ...cook, user_action_required: false }]
-      : [cook];
+    const p = this._setup;
+    const stages = [];
+    p.steps.forEach((st, i) => {
+      const base = stageBase(st);
+      if (i === 0 && p.preheat) stages.push({ ...base, kind: "preheat" });
+      const cook = { ...base, kind: "cook", user_action_required: i > 0 && st.waits };
+      if (st.end === "timer") Object.assign(cook, { timer_added: true, duration_secs: st.timer * 60 });
+      if (st.end === "probe") Object.assign(cook, { probe_added: true, probe_target_c: st.probe });
+      stages.push(cook);
+    });
     this._call("mqtt", "publish", {
       topic: `${this._config.mqtt_prefix}/cmd/start`,
-      payload: JSON.stringify({ title: setupTitle(s), stages }),
+      payload: JSON.stringify({ title: programTitle(p), stages }),
     });
+  }
+
+  _addStep() {
+    const p = this._setup;
+    if (p.steps.length >= MAX_STEPS) return;
+    const steps = p.steps.map((x) => ({ ...x }));
+    // A copy of the selected step, so only what differs needs changing.
+    steps.splice(p.sel + 1, 0, { ...steps[p.sel], waits: false });
+    this._setProgram({ ...p, steps, sel: p.sel + 1 });
+  }
+
+  _removeStep() {
+    const p = this._setup;
+    if (p.steps.length < 2) return;
+    const steps = p.steps.filter((_, i) => i !== p.sel);
+    this._setProgram({ ...p, steps, sel: Math.min(p.sel, steps.length - 1) });
+  }
+
+  _setProgram(p) {
+    this._setup = p;
+    saveSetup(p);
+    this._render();
   }
 
   _stop() {
@@ -211,14 +237,12 @@ class AnovaOvenCard extends HTMLElement {
   }
 
   _update(change) {
-    const s = { ...this._setup, ...change };
-    const [lo, hi] = LIMITS[s.sousVide ? "wet" : "dry"];
-    s.temp = clamp(s.sousVide ? Math.round(s.temp * 2) / 2 : Math.round(s.temp), lo, hi);
-    s.timer = clamp(s.timer, 1, 24 * 60);
-    s.probe = clamp(Math.round(s.probe), ...LIMITS.probe);
-    s.steam = clamp(s.steam, 0, 100);
-    this._setup = s;
-    saveSetup(s);
+    const p = { ...this._setup, steps: this._setup.steps.map((x) => ({ ...x })) };
+    const st = p.steps[p.sel];
+    for (const [k, v] of Object.entries(change)) (STEP_KEYS.includes(k) ? st : p)[k] = v;
+    normalizeStep(st);
+    this._setup = p;
+    saveSetup(p);
     // While a button is held, only the numbers change.
     if (this._holding) this._renderValues();
     else this._render();
@@ -226,7 +250,7 @@ class AnovaOvenCard extends HTMLElement {
 
   // One step of a - or + button. `dir` is -1 or 1.
   _step(what, dir, m) {
-    const s = this._setup;
+    const s = this._view();
     if (m.cooking) {
       // On a running cook, each step is one command to the oven.
       if (what === "temp" && m.target !== null) this._setTarget(m.target + dir * 5);
@@ -281,14 +305,14 @@ class AnovaOvenCard extends HTMLElement {
       return;
     }
     const m = this._model();
-    const s = this._setup;
+    const s = this._view();
     const live = m.cooking;
     const off = !m.connected;
     const tone = off ? "error" : live ? "active" : "idle";
     const armed = Date.now() < this._stopArmedUntil;
     const lampShown = this._lampPending ? this._lampPending.on : m.lamp;
     const warning = warningText(m);
-    const needsProbe = s.end === "probe" && m.probe === null;
+    const needsProbe = s.steps.some((st) => st.end === "probe") && m.probe === null;
 
     // Temperature: the setup's value, or the running cook's target.
     const [tlo, thi] = live ? LIMITS.dry : LIMITS[s.sousVide ? "wet" : "dry"];
@@ -316,12 +340,13 @@ class AnovaOvenCard extends HTMLElement {
             <ha-icon icon="${lampShown ? "mdi:lightbulb-on" : "mdi:lightbulb-outline"}"></ha-icon>
           </button>
           <button class="icon-state tools ${this._panel ? "on" : ""}" id="tools" title="Maintenance">
-            <ha-icon icon="mdi:wrench-outline"></ha-icon>
+            <ha-icon icon="mdi:cog-outline"></ha-icon>
           </button>
         </div>
 
         <div class="features">
           ${this._panel === "maintenance" ? this._maintenanceView(m) : `
+          ${live ? runningChips(m) : stepChips(s, off)}
           ${live ? `
             <div class="feature progress" title="${esc(m.stageDescription || "")}">
               <div class="progress-fill" id="bar" style="width:${pct(progress(m))}"></div>
@@ -351,13 +376,20 @@ class AnovaOvenCard extends HTMLElement {
               ${m.nextReady ? `<button class="feature action" id="next"><ha-icon icon="mdi:skip-next"></ha-icon>Next stage</button>` : ""}
               <button class="feature action stop ${armed ? "armed" : ""}" id="stop">
                 <ha-icon icon="mdi:stop"></ha-icon>${armed ? "Tap again to stop" : "Stop"}</button>` : `
-              <button class="feature toggle labeled ${s.preheat ? "on preheat" : ""}" id="preheat"
-                title="${s.preheat ? "Preheat on: the oven heats up first; the cook and its timer start at temperature"
-                  : "Preheat off: the cook and its timer start now"}" aria-pressed="${s.preheat}" ${off ? "disabled" : ""}>
-                <ha-icon icon="${s.preheat ? "mdi:checkbox-marked-circle-outline" : "mdi:checkbox-blank-circle-outline"}"></ha-icon><span>Preheat</span>
-              </button>
+              ${s.sel === 0 ? `
+                <button class="feature toggle labeled ${s.preheat ? "on preheat" : ""}" id="preheat"
+                  title="${s.preheat ? "Preheat on: the oven heats up first; step 1 and its timer start at temperature"
+                    : "Preheat off: step 1 and its timer start now"}" aria-pressed="${s.preheat}" ${off ? "disabled" : ""}>
+                  <ha-icon icon="${s.preheat ? "mdi:checkbox-marked-circle-outline" : "mdi:checkbox-blank-circle-outline"}"></ha-icon><span>Preheat</span>
+                </button>` : `
+                <button class="feature toggle labeled ${s.waits ? "on waits" : ""}" id="waits"
+                  title="${s.waits ? `Step ${s.sel + 1} waits until you tap Next stage` : `Step ${s.sel + 1} starts when step ${s.sel} ends`}"
+                  aria-pressed="${s.waits}" ${off ? "disabled" : ""}>
+                  <ha-icon icon="${s.waits ? "mdi:hand-back-right-outline" : "mdi:arrow-right-bold-outline"}"></ha-icon>
+                  <span>${s.waits ? "Waits for me" : "Starts by itself"}</span>
+                </button>`}
               <button class="feature action start" id="start" ${off || needsProbe ? "disabled" : ""}>
-                <ha-icon icon="mdi:play"></ha-icon>${s.sousVide ? "Cook" : "Bake"}</button>`}
+                <ha-icon icon="mdi:play"></ha-icon>${startLabel(s)}</button>`}
           </div>
           `}
         </div>
@@ -425,7 +457,13 @@ class AnovaOvenCard extends HTMLElement {
     if ($("stop")) $("stop").onclick = () => this._stop();
     if ($("start")) $("start").onclick = () => this._start();
     if ($("next")) $("next").onclick = () => this._call("button", "press", { entity_id: this._id("button", "next_stage") });
-    if ($("sous-vide")) $("sous-vide").onclick = () => this._update({ sousVide: !this._setup.sousVide });
+    if ($("sous-vide")) $("sous-vide").onclick = () => this._update({ sousVide: !this._view().sousVide });
+    if ($("waits")) $("waits").onclick = () => this._update({ waits: !this._view().waits });
+    if ($("step-add")) $("step-add").onclick = () => this._addStep();
+    if ($("step-remove")) $("step-remove").onclick = (ev) => { ev.stopPropagation(); this._removeStep(); };
+    root.querySelectorAll("[data-chip]").forEach((b) => {
+      b.onclick = () => { if (Number(b.dataset.chip) !== this._setup.sel) this._update({ sel: Number(b.dataset.chip) }); };
+    });
     if ($("preheat")) $("preheat").onclick = () => this._update({ preheat: !this._setup.preheat });
     if ($("tools")) $("tools").onclick = () => { this._panel = this._panel ? null : "maintenance"; this._render(); };
     if ($("tools-close")) $("tools-close").onclick = () => { this._panel = null; this._render(); };
@@ -451,11 +489,11 @@ class AnovaOvenCard extends HTMLElement {
     });
 
     // Sliders: drag for big changes; the value commits on release.
-    this._bindDrag("temp", { ...temp, step: m.cooking ? 1 : this._setup.sousVide ? 0.5 : 1,
+    this._bindDrag("temp", { ...temp, step: m.cooking ? 1 : this._view().sousVide ? 0.5 : 1,
       label: (v) => fmtTemp(v, " °C"),
       commit: (v) => (m.cooking ? this._setTarget(v) : this._update({ temp: v })) });
-    this._bindDrag("steam", { lo: 0, hi: 100, step: 10, disabled: m.cooking || !m.connected || this._setup.sousVide,
-      label: (v) => steamLabel(m, { ...this._setup, steam: v }),
+    this._bindDrag("steam", { lo: 0, hi: 100, step: 10, disabled: m.cooking || !m.connected || this._view().sousVide,
+      label: (v) => steamLabel(m, { ...this._view(), steam: v }),
       commit: (v) => this._update({ steam: v }) });
   }
 
@@ -502,7 +540,7 @@ class AnovaOvenCard extends HTMLElement {
   }
 
   _renderValues() {
-    const s = this._setup;
+    const s = this._view();
     const m = this._model();
     const set = (id, text) => { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = text; };
     const [lo, hi] = LIMITS[s.sousVide ? "wet" : "dry"];
@@ -523,7 +561,7 @@ class AnovaOvenCard extends HTMLElement {
     if (m.cooking) {
       if ($("bar")) $("bar").style.width = pct(progress(m));
       if ($("bar-label")) $("bar-label").innerHTML = barLabel(m);
-      if ($("end-value")) $("end-value").textContent = endValue(m, this._setup);
+      if ($("end-value")) $("end-value").textContent = endValue(m, this._view());
     }
   }
 }
@@ -617,9 +655,72 @@ function modeIcon(key) {
   return `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">${inner}</svg>`;
 }
 
-function setupTitle(s) {
-  const mode = MODES.find((m) => m.key === s.mode).label;
-  return s.sousVide ? `Sous vide ${fmtTemp(s.temp, " °C")}` : `${mode} ${fmtTemp(s.temp, " °C")}${s.steam ? `, ${s.steam} % steam` : ""}`;
+function stageBase(st) {
+  const elements = MODES.find((m) => m.key === st.mode).elements;
+  return {
+    temperature_c: st.temp,
+    temperature_bulbs_mode: st.sousVide ? "wet" : "dry",
+    steam_pct: st.sousVide ? 100 : st.steam,
+    fan_speed: 100,
+    heating_element_top: elements.includes("top"),
+    heating_element_rear: elements.includes("rear"),
+    heating_element_bottom: elements.includes("bottom"),
+  };
+}
+
+function normalizeStep(st) {
+  const [lo, hi] = LIMITS[st.sousVide ? "wet" : "dry"];
+  st.temp = clamp(st.sousVide ? Math.round(st.temp * 2) / 2 : Math.round(st.temp), lo, hi);
+  st.timer = clamp(st.timer, 1, 24 * 60);
+  st.probe = clamp(Math.round(st.probe), ...LIMITS.probe);
+  st.steam = clamp(st.steam, 0, 100);
+}
+
+function stepTitle(st) {
+  const mode = MODES.find((m) => m.key === st.mode).label;
+  return st.sousVide ? `Sous vide ${fmtTemp(st.temp, " °C")}` : `${mode} ${fmtTemp(st.temp, " °C")}${st.steam ? `, ${st.steam} % steam` : ""}`;
+}
+
+function programTitle(p) {
+  return p.steps.length === 1 ? stepTitle(p.steps[0]) : `${stepTitle(p.steps[0])} + ${p.steps.length - 1} more`;
+}
+
+function startLabel(s) {
+  const verb = s.steps.every((st) => st.sousVide) ? "Cook" : "Bake";
+  return s.steps.length > 1 ? `${verb} · ${s.steps.length} steps` : verb;
+}
+
+// The steps row: one chip per step (tap to edit it), x on the selected
+// chip to remove it, and + to add a copy of the selected step.
+function stepChips(s, off) {
+  const chip = (st, i) => {
+    const on = i === s.sel;
+    const icons = `${st.sousVide ? `<ha-icon icon="mdi:water-thermometer"></ha-icon>` : ""}${!st.sousVide && st.steam ? `<ha-icon icon="mdi:water-percent"></ha-icon>` : ""}${st.end === "timer" ? `<ha-icon icon="mdi:timer-outline"></ha-icon>` : st.end === "probe" ? `<ha-icon icon="mdi:thermometer-probe"></ha-icon>` : ""}${i > 0 && st.waits ? `<ha-icon icon="mdi:hand-back-right-outline"></ha-icon>` : ""}`;
+    return `
+      <button class="chip-step ${on ? "on" : ""}" data-chip="${i}" title="Step ${i + 1}: ${esc(stepTitle(st))}" ${off ? "disabled" : ""}>
+        <span class="n">${i + 1}</span><span>${fmtTemp(st.temp)}</span>${icons}
+        ${on && s.steps.length > 1 ? `<span class="x" id="step-remove" role="button" title="Remove step ${i + 1}"><ha-icon icon="mdi:close"></ha-icon></span>` : ""}
+      </button>`;
+  };
+  return `
+    <div class="feature steps" role="tablist" aria-label="Steps">
+      ${s.steps.map(chip).join("")}
+      <button class="chip-step add" id="step-add" title="Add a step (a copy of step ${s.sel + 1})"
+        ${off || s.steps.length >= MAX_STEPS ? "disabled" : ""}><ha-icon icon="mdi:plus"></ha-icon></button>
+    </div>`;
+}
+
+// While cooking: the running cook's stages, done ones ticked.
+function runningChips(m) {
+  const match = /^(\d+) of (\d+)$/.exec(m.stage || "");
+  const cur = match ? Number(match[1]) : 1;
+  const total = match ? Number(match[2]) : 1;
+  const chips = Array.from({ length: total }, (_, i) => {
+    const n = i + 1;
+    const state = n < cur || (m.done && n === cur) ? "done" : n === cur ? "on" : "";
+    return `<span class="chip-step ${state}"><span class="n">${state === "done" ? "✓" : n}</span></span>`;
+  }).join("");
+  return `<div class="feature steps running" aria-label="Stages">${chips}</div>`;
 }
 
 function fmtTemp(v, unit = "°") {
@@ -691,16 +792,27 @@ function esc(s) {
 function loadSetup() {
   try {
     const saved = JSON.parse(localStorage.getItem(SETUP_KEY) || "null");
+    if (saved && Array.isArray(saved.steps) && saved.steps.length) {
+      const steps = saved.steps
+        .filter((st) => st && MODES.some((m) => m.key === st.mode))
+        .slice(0, MAX_STEPS)
+        .map((st) => { const x = { ...DEFAULT_STEP, ...st }; normalizeStep(x); return x; });
+      if (steps.length) {
+        return { steps, sel: clamp(Number(saved.sel) || 0, 0, steps.length - 1), preheat: saved.preheat !== false };
+      }
+    }
+    // A single setup from card 0.3 to 0.7.
     if (saved && typeof saved === "object" && MODES.some((m) => m.key === saved.mode)) {
-      const s = { ...DEFAULT_SETUP, ...saved };
-      if (saved.bulb === "wet") s.sousVide = true; // from card 0.3
-      if (!("end" in saved) && saved.timer > 0) s.end = "timer"; // from 0.3 and 0.4
-      if (!(s.timer > 0)) s.timer = DEFAULT_SETUP.timer;
-      delete s.bulb;
-      return s;
+      const st = { ...DEFAULT_STEP };
+      for (const k of STEP_KEYS) if (k in saved) st[k] = saved[k];
+      if (saved.bulb === "wet") st.sousVide = true;
+      if (!("end" in saved) && saved.timer > 0) st.end = "timer";
+      if (!(st.timer > 0)) st.timer = DEFAULT_STEP.timer;
+      normalizeStep(st);
+      return { steps: [st], sel: 0, preheat: saved.preheat !== false };
     }
   } catch (_) { /* no storage */ }
-  return { ...DEFAULT_SETUP };
+  return { ...DEFAULT_SETUP, steps: [{ ...DEFAULT_STEP }] };
 }
 
 function saveSetup(s) {
@@ -796,6 +908,29 @@ const STYLE = `
   .toggle { display: grid; place-items: center; background: var(--track); color: var(--secondary-text-color); }
   .toggle.on { background: rgb(var(--rgb-blue-color, 33, 150, 243)); color: #fff; }
   .toggle.on.preheat { background: rgb(var(--oven-rgb)); }
+  .toggle.on.waits { background: rgb(var(--rgb-purple-color, 146, 107, 199)); }
+
+  /* Steps row: chips in one 42 px row; it scrolls sideways if needed. */
+  .steps { display: flex; align-items: center; gap: 6px; padding: 0 5px; background: var(--track);
+    overflow-x: auto; scrollbar-width: none; }
+  .steps::-webkit-scrollbar { display: none; }
+  .chip-step { flex: none; height: 32px; padding: 0 10px; border-radius: 9px; display: inline-flex; align-items: center; gap: 4px;
+    font-size: 13px; font-weight: 500; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; }
+  .chip-step ha-icon { --mdc-icon-size: 14px; }
+  .chip-step .n { min-width: 16px; height: 16px; border-radius: 8px; display: inline-grid; place-items: center; font-size: 11px;
+    font-weight: 700; background: rgba(var(--rgb-primary-text-color, 33, 33, 33), .1); }
+  .chip-step.on { background: var(--card-background-color, #fff); color: rgb(var(--oven-rgb));
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .14); }
+  .chip-step.on .n { background: rgb(var(--oven-rgb)); color: #fff; }
+  .chip-step.done { color: var(--secondary-text-color); }
+  .chip-step.done .n { background: rgba(var(--oven-rgb), .25); color: rgb(var(--oven-rgb)); }
+  .chip-step .x { display: grid; place-items: center; width: 20px; height: 20px; margin-right: -4px; border-radius: 50%;
+    color: var(--secondary-text-color); }
+  .chip-step .x:hover { background: rgba(var(--rgb-error-color, 219, 68, 55), .15); color: var(--error-color, #db4437); }
+  .chip-step.add { padding: 0 8px; color: var(--primary-text-color); }
+  .chip-step.add ha-icon { --mdc-icon-size: 18px; }
+  .chip-step:disabled { opacity: .4; }
+  .steps.running .chip-step { padding: 0 6px; }
   .pair.go > .toggle.labeled { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 0 14px;
     font-size: 14px; font-weight: 500; }
 
@@ -806,7 +941,7 @@ const STYLE = `
   .icon-state.tools.on { background: rgba(var(--oven-rgb), .2); color: rgb(var(--oven-rgb)); }
 
   /* Maintenance panel: exactly the height of the five rows. */
-  .panel { height: calc(var(--h) * 5 + var(--gap) * 4); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .panel { height: calc(var(--h) * 6 + var(--gap) * 5); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
   .panel-head { display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-weight: 600;
     color: var(--primary-text-color); }
   .item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--r); background: var(--track); }

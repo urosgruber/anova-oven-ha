@@ -33,6 +33,9 @@ jobs:
       - name: Test
         run: cargo test --locked -p anova-oven-server
 
+      - name: Test the dashboard card
+        run: node tests/card-smoke.js dist/anova-oven-card.js
+
   release:
     name: Release app image
     needs: test

@@ -36,8 +36,11 @@ title: Oven
 ```
 
 The card follows Home Assistant's tile card. Under the header (oven state,
-door, light) it always shows the same five rows, so it never changes size:
+door, light) it always shows the same six rows, so it never changes size:
 
+0. Steps: one chip per step. Tap a chip to edit that step with the rows
+   below, + to add a step (a copy of the selected one), x on the selected
+   chip to remove it. During a cook, the chips show the stages.
 1. Heating elements: any one or two of top, bottom and rear (six choices).
    During a cook, this row shows the progress.
 2. Temperature: drag the slider, or tap - and +. The toggle next to it
@@ -47,7 +50,9 @@ door, light) it always shows the same five rows, so it never changes size:
 4. How the cook ends: until you stop, a timer, or a probe temperature,
    with - and + for the time or the probe target.
 5. Preheat and Bake (or Cook, with sous vide on). With Preheat on, the
-   oven heats up first, and the cook and its timer start at temperature.
+   oven heats up first, and step 1 and its timer start at temperature.
+   For step 2 and later, the left button chooses "Starts by itself" or
+   "Waits for me" (the step waits until you tap Next stage).
    During a cook: Next stage when a stage waits for you, and Stop (tap
    twice).
 
@@ -55,10 +60,10 @@ During a cook, the temperature slider and - and + change the running
 cook's temperature, and - and + change a running timer.
 
 The header shows the door, the probe (orange while plugged in; its
-temperature is in the status line), the light, and a wrench. "End by
+temperature is in the status line), the light, and a cog. "End by
 probe" works only with the probe plugged in.
 
-The wrench opens the maintenance panel in the same space:
+The cog opens the maintenance panel in the same space:
 
 - Heating element prep (from the oven's manual): rear 176 °C for 15 min,
   then top and bottom 176 °C for 15 min. Between them, let the oven cool
