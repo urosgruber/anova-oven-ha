@@ -24,7 +24,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.10.1";
+const CARD_VERSION = "0.10.2";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
@@ -1130,6 +1130,7 @@ const STYLE = `
   .slider.disabled .track { cursor: default; }
   .slider.bare { background: none; }
   .slider.bare .track { margin: 0; border-radius: var(--r); }
+  .slider.bare .track-value { line-height: var(--h); }
   .slider.steam .track { background: rgba(var(--rgb-light-blue-color, 3, 169, 244), .14); }
   .slider.steam .fill { background: rgba(var(--rgb-light-blue-color, 3, 169, 244), .45); }
   .fill { position: absolute; inset: 0 auto 0 0; background: rgba(var(--oven-rgb), .45); border-radius: 8px 0 0 8px; }
