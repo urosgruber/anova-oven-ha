@@ -386,19 +386,35 @@ impl Processor {
                 return;
             }
             "start" => {
-                // `{"recipe_id": "…"}`, or anything else (a button's
-                // `PRESS`) for the selected recipe.
-                let recipe_id = serde_json::from_str::<serde_json::Value>(&text)
-                    .ok()
-                    .and_then(|v| v.get("recipe_id")?.as_str().map(String::from))
-                    .or_else(|| self.selected.clone());
-                let Some(recipe_id) = recipe_id else {
-                    self.command_failed("start", "no recipe selected").await;
-                    return;
-                };
-                StateMachineCommand::StartCook {
-                    recipe_id,
-                    reply: reply_tx,
+                // `{"stages": […], "title": "…"}` for a manual cook (the
+                // dashboard card), `{"recipe_id": "…"}`, or anything else (a
+                // button's `PRESS`) for the selected recipe.
+                let json = serde_json::from_str::<serde_json::Value>(&text).ok();
+                if let Some(json) = json.as_ref().filter(|v| v.get("stages").is_some()) {
+                    match manual_cook(json) {
+                        Ok((title, stages)) => StateMachineCommand::StartManualCook {
+                            title,
+                            stages,
+                            reply: reply_tx,
+                        },
+                        Err(e) => {
+                            self.command_failed("start", &e).await;
+                            return;
+                        }
+                    }
+                } else {
+                    let recipe_id = json
+                        .as_ref()
+                        .and_then(|v| v.get("recipe_id")?.as_str().map(String::from))
+                        .or_else(|| self.selected.clone());
+                    let Some(recipe_id) = recipe_id else {
+                        self.command_failed("start", "no recipe selected").await;
+                        return;
+                    };
+                    StateMachineCommand::StartCook {
+                        recipe_id,
+                        reply: reply_tx,
+                    }
                 }
             }
             "stop" => StateMachineCommand::StopCook { reply: reply_tx },
@@ -453,6 +469,32 @@ fn broker_address(url: &str) -> Result<(String, u16), String> {
 }
 
 /// A control command from its topic name and payload.
+/// A manual cook from the `start` command's `{"stages": […], "title": "…"}`,
+/// with the same checks as a saved recipe.
+fn manual_cook(json: &serde_json::Value) -> Result<(String, Vec<anova_oven_api::Stage>), String> {
+    let stages: Vec<anova_oven_api::Stage> = serde_json::from_value(json["stages"].clone())
+        .map_err(|e| format!("bad stages: {e}"))?;
+    let title = json
+        .get("title")
+        .and_then(|t| t.as_str())
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or("Manual cook")
+        .to_string();
+    let recipe = crate::processors::local_store::normalize(Recipe {
+        id: String::new(),
+        title,
+        stage_count: 0,
+        stages,
+        source: Default::default(),
+    })
+    .map_err(|e| match e {
+        crate::processors::local_store::RecipeError::Invalid(msg) => msg,
+        other => format!("{other:?}"),
+    })?;
+    Ok((recipe.title, recipe.stages))
+}
+
 fn control_request(name: &str, payload: &str) -> Result<ControlRequest, String> {
     match name {
         "next_stage" => Ok(ControlRequest::NextStage),
@@ -507,6 +549,44 @@ fn state_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_cook_takes_the_cards_stages() {
+        let json = serde_json::json!({
+            "title": " Pizza ",
+            "stages": [
+                { "kind": "preheat", "temperature_c": 220.0, "steam_pct": 0.0, "fan_speed": 100,
+                  "heating_element_top": true, "heating_element_bottom": true },
+                { "kind": "cook", "temperature_c": 220.0, "steam_pct": 30.0, "fan_speed": 100,
+                  "heating_element_top": true, "heating_element_bottom": true,
+                  "timer_added": true, "duration_secs": 600 },
+            ],
+        });
+        let (title, stages) = manual_cook(&json).unwrap();
+        assert_eq!(title, "Pizza");
+        assert_eq!(stages.len(), 2);
+        assert!(stages.iter().all(|s| s.id.is_some()));
+    }
+
+    #[test]
+    fn manual_cook_refuses_what_the_oven_cant_run() {
+        let stage = |extra: serde_json::Value| {
+            let mut s = serde_json::json!({ "kind": "cook", "temperature_c": 180.0,
+                "steam_pct": 0.0, "fan_speed": 100, "heating_element_rear": true });
+            s.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            serde_json::json!({ "stages": [s] })
+        };
+        // Sous vide above 100 °C.
+        assert!(manual_cook(&stage(serde_json::json!({
+            "temperature_bulbs_mode": "wet", "steam_pct": 100.0 }))).is_err());
+        // All three elements.
+        assert!(manual_cook(&stage(serde_json::json!({
+            "heating_element_top": true, "heating_element_bottom": true }))).is_err());
+        // Not stages at all.
+        assert!(manual_cook(&serde_json::json!({ "stages": "pizza" })).is_err());
+        // No title: the default.
+        assert_eq!(manual_cook(&stage(serde_json::json!({}))).unwrap().0, "Manual cook");
+    }
 
     #[test]
     fn control_payloads() {
