@@ -10,7 +10,9 @@
  *   3. how the cook ends: until you stop, timer or probe, with its value
  *   4. steam, and the preheat toggle
  *   5. Start (while cooking: Stop, and Next stage when a stage waits)
- * The same rows show in every state, so the card never changes size.
+ * The same rows show in every state, so the card never changes size. The
+ * wrench in the header swaps the rows for a maintenance panel of the same
+ * height (heating element prep, descale, water tank).
  *
  *   type: custom:anova-oven-card
  *   title: Oven                 # optional
@@ -22,7 +24,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.5.0";
+const CARD_VERSION = "0.6.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
@@ -56,6 +58,7 @@ class AnovaOvenCard extends HTMLElement {
     this._config = { prefix: "anova_oven", mqtt_prefix: "anova/oven", ...config };
     this._stopArmedUntil = 0;
     this._lampPending = null;
+    this._panel = null;
     this._setup = loadSetup();
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this._render();
@@ -254,6 +257,7 @@ class AnovaOvenCard extends HTMLElement {
     const armed = Date.now() < this._stopArmedUntil;
     const lampShown = this._lampPending ? this._lampPending.on : m.lamp;
     const warning = warningText(m);
+    const needsProbe = s.end === "probe" && m.probe === null;
 
     // Temperature: the setup's value, or the running cook's target.
     const [tlo, thi] = live ? LIMITS.dry : LIMITS[s.sousVide ? "wet" : "dry"];
@@ -272,13 +276,21 @@ class AnovaOvenCard extends HTMLElement {
           <div class="icon-state ${m.door ? "warn" : ""}" title="${m.door ? "Door open" : "Door closed"}">
             <ha-icon icon="${m.door ? "mdi:door-open" : "mdi:door-closed"}"></ha-icon>
           </div>
+          <div class="icon-state probe ${m.probe !== null ? "in" : ""}"
+            title="${m.probe !== null ? `Probe plugged in: ${Math.round(m.probe)} °C` : "Probe not plugged in"}">
+            <ha-icon icon="mdi:thermometer-probe"></ha-icon>
+          </div>
           <button class="icon-state lamp ${lampShown ? "on" : ""} ${this._lampPending ? "pending" : ""}" id="lamp"
             title="${this._lampPending ? "Switching…" : lampShown ? "Light on" : "Light off"}" ${off ? "disabled" : ""}>
             <ha-icon icon="${lampShown ? "mdi:lightbulb-on" : "mdi:lightbulb-outline"}"></ha-icon>
           </button>
+          <button class="icon-state tools ${this._panel ? "on" : ""}" id="tools" title="Maintenance">
+            <ha-icon icon="mdi:wrench-outline"></ha-icon>
+          </button>
         </div>
 
         <div class="features">
+          ${this._panel === "maintenance" ? this._maintenanceView(m) : `
           ${live ? `
             <div class="feature progress" title="${esc(m.stageDescription || "")}">
               <div class="progress-fill" id="bar" style="width:${pct(progress(m))}"></div>
@@ -295,7 +307,8 @@ class AnovaOvenCard extends HTMLElement {
           </div>
 
           <div class="pair end">
-            ${select("end", ENDS.map((e) => ({ key: e.key, label: e.label, html: `<ha-icon icon="${e.icon}"></ha-icon>` })),
+            ${select("end", ENDS.map((e) => ({ key: e.key, label: e.key === "probe" && m.probe === null ? "Probe (plug it in first)" : e.label,
+              html: `<ha-icon icon="${e.icon}"></ha-icon>`, disabled: e.key === "probe" && m.probe === null && s.end !== "probe" })),
               live ? (m.timerTotal ? "timer" : m.probe !== null ? "probe" : "none") : s.end, off || live)}
             ${stepper("end", endValue(m, s), endDisabled(m, s, off))}
           </div>
@@ -304,9 +317,10 @@ class AnovaOvenCard extends HTMLElement {
             ${stepper("steam", live ? (m.steam === null ? "—" : `${Math.round(m.steam)} % steam`)
               : (s.sousVide ? "100 % steam" : s.steam ? `${s.steam} % steam` : "No steam"),
               off || live || s.sousVide, "mdi:water-percent")}
-            <button class="feature toggle ${!live && s.preheat ? "on preheat" : ""}" id="preheat"
-              title="Preheat first: ${s.preheat ? "on" : "off"}" aria-pressed="${s.preheat}" ${off || live ? "disabled" : ""}>
-              <ha-icon icon="mdi:thermometer-chevron-up"></ha-icon>
+            <button class="feature toggle labeled ${!live && s.preheat ? "on preheat" : ""}" id="preheat"
+              title="${s.preheat ? "Preheat on: the oven heats up first; the cook and its timer start at temperature"
+                : "Preheat off: the cook and its timer start now"}" aria-pressed="${s.preheat}" ${off || live ? "disabled" : ""}>
+              <ha-icon icon="${s.preheat ? "mdi:checkbox-marked-circle-outline" : "mdi:checkbox-blank-circle-outline"}"></ha-icon><span>Preheat</span>
             </button>
           </div>
 
@@ -315,12 +329,66 @@ class AnovaOvenCard extends HTMLElement {
             ${live
               ? `<button class="feature action stop ${armed ? "armed" : ""}" id="stop">
                    <ha-icon icon="mdi:stop"></ha-icon>${armed ? "Tap again to stop" : "Stop"}</button>`
-              : `<button class="feature action start" id="start" ${off ? "disabled" : ""}>
-                   <ha-icon icon="mdi:play"></ha-icon>Start</button>`}
+              : `<button class="feature action start" id="start" ${off || needsProbe ? "disabled" : ""}>
+                   <ha-icon icon="mdi:play"></ha-icon>${s.sousVide ? "Cook" : "Bake"}</button>`}
           </div>
+          `}
         </div>
       </ha-card>`;
     this._bind(m, { lo: tlo, hi: thi, disabled: tDisabled });
+  }
+
+  _maintenanceView(m) {
+    const busy = !m.connected || m.cooking;
+    return `
+      <div class="panel">
+        <div class="panel-head">
+          <span>Maintenance</span>
+          <button class="icon-state" id="tools-close" title="Close"><ha-icon icon="mdi:close"></ha-icon></button>
+        </div>
+        <div class="item">
+          <div class="item-text">
+            <b>Heating element prep</b>
+            <span>Rear 176 °C for 15 min, then top and bottom 176 °C for 15 min. Between them, let the oven cool,
+              open the door to air it, then tap Next stage. Afterwards, tap Stop.</span>
+          </div>
+          <button class="feature action start item-btn" id="prep" ${busy ? "disabled" : ""}><ha-icon icon="mdi:play"></ha-icon>Start</button>
+        </div>
+        <div class="item">
+          <div class="item-text">
+            <b>Descale <span class="tag ${m.descale ? "warn" : ""}">${m.descale ? "needed" : "not needed"}</span></b>
+            <span>Start it on the oven: fill the tank with descaler and water, press the descale symbol, then Start on
+              the handle.</span>
+          </div>
+        </div>
+        <div class="item">
+          <div class="item-text">
+            <b>Water tank <span class="tag ${m.waterEmpty ? "warn" : ""}">${m.waterEmpty ? "empty" : "OK"}</span></b>
+            <span>Steam and sous vide need water.</span>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // Heating element prep, from the oven's manual: two timed stages at
+  // 176 °C; the second waits for Next stage, so the oven can cool between.
+  _startPrep() {
+    const stage = (elements, extra = {}) => ({
+      kind: "cook", temperature_c: 176, temperature_bulbs_mode: "dry", steam_pct: 0, fan_speed: 100,
+      heating_element_top: elements.includes("top"),
+      heating_element_rear: elements.includes("rear"),
+      heating_element_bottom: elements.includes("bottom"),
+      timer_added: true, duration_secs: 15 * 60, ...extra,
+    });
+    this._call("mqtt", "publish", {
+      topic: `${this._config.mqtt_prefix}/cmd/start`,
+      payload: JSON.stringify({
+        title: "Heating element prep",
+        stages: [stage(["rear"]), stage(["top", "bottom"], { user_action_required: true })],
+      }),
+    });
+    this._panel = null;
+    this._render();
   }
 
   _bind(m, temp) {
@@ -332,6 +400,9 @@ class AnovaOvenCard extends HTMLElement {
     if ($("next")) $("next").onclick = () => this._call("button", "press", { entity_id: this._id("button", "next_stage") });
     if ($("sous-vide")) $("sous-vide").onclick = () => this._update({ sousVide: !this._setup.sousVide });
     if ($("preheat")) $("preheat").onclick = () => this._update({ preheat: !this._setup.preheat });
+    if ($("tools")) $("tools").onclick = () => { this._panel = this._panel ? null : "maintenance"; this._render(); };
+    if ($("tools-close")) $("tools-close").onclick = () => { this._panel = null; this._render(); };
+    if ($("prep")) $("prep").onclick = () => this._startPrep();
     root.querySelectorAll("[data-select]").forEach((b) => {
       b.onclick = () => this._update({ [b.dataset.select]: b.dataset.key });
     });
@@ -427,7 +498,7 @@ function select(name, options, current, disabled) {
     <div class="feature select" role="radiogroup">
       ${options.map((o) => `
         <button class="option ${current === o.key ? "on" : ""}" data-select="${name}" data-key="${o.key}" role="radio"
-          aria-checked="${current === o.key}" title="${o.label}" aria-label="${o.label}" ${disabled ? "disabled" : ""}>${o.html}</button>`).join("")}
+          aria-checked="${current === o.key}" title="${o.label}" aria-label="${o.label}" ${disabled || o.disabled ? "disabled" : ""}>${o.html}</button>`).join("")}
     </div>`;
 }
 
@@ -464,7 +535,7 @@ function endValue(m, s) {
     return "Until you stop";
   }
   if (s.end === "timer") return clock(s.timer * 60);
-  if (s.end === "probe") return `Probe ${s.probe} °C`;
+  if (s.end === "probe") return m.probe === null ? "Plug in the probe" : `Probe to ${s.probe} °C`;
   return "Until you stop";
 }
 
@@ -525,7 +596,8 @@ function secondary(m) {
   const temp = m.temp === null ? "—" : `${Math.round(m.temp)} °C`;
   if (!m.cooking) return `Idle · ${temp}${m.probe !== null ? ` · probe ${Math.round(m.probe)} °C` : ""}`;
   const what = m.done ? "Done, still heating" : m.phase;
-  return esc(`${m.recipe ? `${m.recipe} · ` : ""}${what} · ${temp}`);
+  const probe = m.probe !== null ? ` · probe ${Math.round(m.probe)} °C` : "";
+  return esc(`${m.recipe ? `${m.recipe} · ` : ""}${what} · ${temp}${probe}`);
 }
 
 function barLabel(m) {
@@ -594,7 +666,8 @@ const STYLE = `
   button:disabled { cursor: default; }
 
   /* Header: the tile card's icon and two text lines. */
-  .header { display: flex; align-items: center; gap: 10px; height: 40px; }
+  .header { display: flex; align-items: center; gap: 4px; height: 40px; }
+  .header .info { margin: 0 6px 0 6px; }
   .shape { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center;
     background: rgba(var(--tone-rgb), .2); color: rgb(var(--tone-rgb)); }
   .shape ha-icon { --mdc-icon-size: 20px; }
@@ -603,7 +676,7 @@ const STYLE = `
   .secondary { font-size: 12px; line-height: 16px; color: var(--secondary-text-color);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
   .secondary.warn { color: var(--error-color, #db4437); font-weight: 500; }
-  .icon-state { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center;
+  .icon-state { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
     color: var(--secondary-text-color); }
   .icon-state ha-icon { --mdc-icon-size: 20px; }
   .icon-state.warn { color: var(--warning-color, #e69500); }
@@ -659,6 +732,27 @@ const STYLE = `
   .toggle { display: grid; place-items: center; background: var(--track); color: var(--secondary-text-color); }
   .toggle.on { background: rgb(var(--rgb-blue-color, 33, 150, 243)); color: #fff; }
   .toggle.on.preheat { background: rgb(var(--oven-rgb)); }
+  .pair.wide > .toggle.labeled { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; padding: 0 14px;
+    font-size: 14px; font-weight: 500; }
+
+  /* Probe status: orange while plugged in. */
+  .icon-state.probe { opacity: .4; }
+  .icon-state.probe.in { opacity: 1; color: rgb(var(--oven-rgb)); background: rgba(var(--oven-rgb), .15); }
+  .icon-state.tools { background: var(--track); }
+  .icon-state.tools.on { background: rgba(var(--oven-rgb), .2); color: rgb(var(--oven-rgb)); }
+
+  /* Maintenance panel: exactly the height of the five rows. */
+  .panel { height: calc(var(--h) * 5 + var(--gap) * 4); overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; font-size: 14px; font-weight: 600;
+    color: var(--primary-text-color); }
+  .item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--r); background: var(--track); }
+  .item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .item-text b { font-size: 14px; font-weight: 500; color: var(--primary-text-color); }
+  .item-text span { font-size: 12px; line-height: 16px; color: var(--secondary-text-color); }
+  .item-btn { flex: none; padding: 0 14px; }
+  .tag { margin-left: 4px; padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 600;
+    background: rgba(var(--rgb-success-color, 67, 160, 71), .15); color: var(--success-color, #43a047); }
+  .tag.warn { background: rgba(var(--rgb-error-color, 219, 68, 55), .15); color: var(--error-color, #db4437); }
   .toggle:disabled { opacity: .4; }
   .toggle ha-icon { --mdc-icon-size: 20px; }
   .action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 14px; font-weight: 500;

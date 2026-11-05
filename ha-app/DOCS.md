@@ -44,10 +44,25 @@ door, light) it always shows the same five rows, so it never changes size:
    switches sous vide on (25-100 °C, steam 100 %) or off (bake).
 3. How the cook ends: until you stop, a timer, or a probe temperature,
    with - and + for the time or the probe target.
-4. Steam (- and +), and the preheat toggle. With preheat on, the oven
-   heats up first and the cook (and its timer) starts at temperature.
-5. Start. During a cook: Stop (tap twice), and Next stage when a stage
-   waits for you.
+4. Steam (- and +), and the Preheat button. With Preheat on, the oven
+   heats up first, and the cook and its timer start at temperature. With
+   Preheat off, the cook and its timer start at once.
+5. Bake (or Cook, with sous vide on). During a cook: Stop (tap twice), and
+   Next stage when a stage waits for you.
+
+The header shows the door, the probe (orange while plugged in; its
+temperature is in the status line), the light, and a wrench. "End by
+probe" works only with the probe plugged in.
+
+The wrench opens the maintenance panel in the same space:
+
+- Heating element prep (from the oven's manual): rear 176 °C for 15 min,
+  then top and bottom 176 °C for 15 min. Between them, let the oven cool
+  and air it, then tap Next stage. Tap Stop at the end.
+- Descale: shows if a descale is needed. Start it on the oven: fill the
+  tank with descaler and water, press the descale symbol, then Start. The
+  card cannot start a descale yet; the command is untested.
+- Water tank: empty or OK.
 
 During a cook, the slider and - and + change the running cook's
 temperature, and - and + change a running timer.
