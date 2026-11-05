@@ -35,10 +35,13 @@ type: custom:anova-oven-card
 title: Oven
 ```
 
-The card works like the oven's handle: set the temperature on the dial,
-choose Bake or Sous vide, the heating elements (one or two), steam and a
-timer, then Start. During a cook, change the temperature, add time, go to
-the next stage, or stop (tap Stop twice).
+The card is laid out like the oven's handle: the heating mode (top, top
+and bottom, bottom, rear with fan), the temperature (tap the thermometer
+for sous vide), the timer and the steam, each with - and +, then Start.
+Hold - or + to change a value fast. With a timer, the oven preheats first
+and the timer starts at temperature. During a cook, the same strip shows
+the live values; - and + change the temperature and the timer of the
+running cook. Tap Stop twice to stop.
 
 ## Data
 
