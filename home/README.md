@@ -69,8 +69,8 @@ app is in `ha-app/`.
    The `#release` part matters: HA then reads the `release` branch.
 2. Install **Anova Oven**.
 
-**Release a new version:** raise `version` in `ha-app/config.yaml` and push
-to `main`. That is all. GitHub Actions (`.github/workflows/ha-app.yml`):
+**Release a new version:** raise `version` in `ha-app/config.yaml`, add an
+entry at the top of `ha-app/CHANGELOG.md`, and push to `main`. That is all. GitHub Actions (`.github/workflows/ha-app.yml`):
 
 1. tests the server,
 2. builds and pushes `ghcr.io/urosgruber/anova-oven-ha-amd64:<version>`,
