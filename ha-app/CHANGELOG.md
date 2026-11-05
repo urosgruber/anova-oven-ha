@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.3
+
+- Steam now really sits next to the timer on cards of about 394 px and
+  more. 0.10.0 to 0.10.2 used a CSS rule that does not work inside Home
+  Assistant's card frame, so steam always kept its own row.
+
 ## 0.10.2
 
 - The steam label is centred in its bar again.
