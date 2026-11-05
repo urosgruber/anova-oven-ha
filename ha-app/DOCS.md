@@ -63,6 +63,11 @@ The header shows the door, the probe (orange while plugged in; its
 temperature is in the status line), the light, and a cog. "End by
 probe" works only with the probe plugged in.
 
+The book button (left of the steps) opens the presets in the same space:
+start a preset (play), load it into the editor (with Undo), save the
+current steps under a name, or delete one (tap twice). Presets are the
+app's recipes; the Recipes sensor carries them with their steps.
+
 The cog opens the maintenance panel in the same space:
 
 - Heating element prep (from the oven's manual): rear 176 °C for 15 min,

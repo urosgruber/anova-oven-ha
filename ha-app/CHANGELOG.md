@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0
+
+- Presets: the book button at the left of the steps row opens them.
+  - Play starts a preset at once.
+  - Load puts its steps into the editor, with Undo for 15 seconds.
+  - Save stores the current steps under a name. Saving under an existing
+    name replaces that preset after a second tap.
+  - Delete needs a second tap.
+- Presets are the app's recipes, so all phones and the debug page share
+  them. New sensor "Recipes" carries them with their steps.
+
 ## 0.8.0
 
 - Steps: a row of step chips above the controls. Tap a chip to edit that
