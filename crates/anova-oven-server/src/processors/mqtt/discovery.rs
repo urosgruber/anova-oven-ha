@@ -40,6 +40,10 @@ impl Topics {
     pub fn selected(&self) -> String {
         self.under("recipe/selected")
     }
+    /// Every recipe with its stages, as the Recipes sensor's attributes.
+    pub fn recipes_attributes(&self) -> String {
+        self.under("recipes/attributes")
+    }
     pub fn selected_attributes(&self) -> String {
         self.under("recipe/selected/attributes")
     }
@@ -302,6 +306,20 @@ fn entities(topics: &Topics, options: &[String]) -> Vec<Entity> {
             json!({
                 "state_topic": topics.selected(),
                 "json_attributes_topic": topics.selected_attributes(),
+            }),
+        ),
+        // The count of recipes; the attributes carry every recipe with its
+        // stages, for the dashboard card's presets.
+        entity(
+            "sensor",
+            "recipes",
+            "Recipes",
+            Needs::Server,
+            json!({
+                "state_topic": topics.recipes(),
+                "value_template": "{{ value_json | length }}",
+                "json_attributes_topic": topics.recipes_attributes(),
+                "icon": "mdi:book-open-variant",
             }),
         ),
         // Binary sensors.

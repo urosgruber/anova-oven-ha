@@ -383,6 +383,8 @@ async fn main() {
                 liveness: liveness.clone(),
                 failures: failures_tx.subscribe(),
                 sm_cmd_tx: sm_cmd_tx.clone(),
+                recipe_files: (mode == Mode::Local)
+                    .then(|| processors::local_store::RecipeFiles::new(&data_dir_from_env())),
             };
             tokio::spawn(async move {
                 processors::mqtt::run(config, sources).await;

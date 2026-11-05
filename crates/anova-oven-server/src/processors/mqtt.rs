@@ -22,6 +22,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
 
 use crate::liveness::Liveness;
+use crate::processors::local_store::{RecipeDraft, RecipeError, RecipeFiles, RecipePatch};
 use crate::read_model::ReadModel;
 use crate::runtime::types::{CommandFailure, ControlRequest, StateMachineCommand};
 
@@ -88,6 +89,8 @@ pub struct Sources {
     pub liveness: Arc<Liveness>,
     pub failures: broadcast::Receiver<CommandFailure>,
     pub sm_cmd_tx: mpsc::Sender<StateMachineCommand>,
+    /// The recipe files, for the save and delete commands (local mode).
+    pub recipe_files: Option<RecipeFiles>,
 }
 
 /// From the client's event loop to the processor.
@@ -116,6 +119,7 @@ pub async fn run(config: MqttConfig, mut sources: Sources) {
         options: Vec::new(),
         selected: None,
         last_state: None,
+        last_recipes: None,
         last_snapshot: None,
         next_stage_ready: None,
     };
@@ -197,6 +201,8 @@ struct Processor {
     /// survives an HA restart and a stale select can't start the wrong one.
     selected: Option<String>,
     last_state: Option<String>,
+    /// The recipes-with-stages payload last published.
+    last_recipes: Option<String>,
     /// `None` until the first snapshot, which is the baseline: a restart
     /// mid-cook announces nothing.
     last_snapshot: Option<Snapshot>,
@@ -232,6 +238,7 @@ impl Processor {
         {
             warn!(error = %e, "[mqtt] subscribe failed");
         }
+        self.last_recipes = None;
         self.publish_recipes().await;
         self.last_state = None;
         self.next_stage_ready = None;
@@ -261,7 +268,93 @@ impl Processor {
             serde_json::to_vec(&titles).unwrap_or_default(),
         )
         .await;
+        self.publish_recipe_list().await;
         self.publish_selected().await;
+    }
+
+    /// Every recipe, by its select option, with its stages. Only when it
+    /// changed, since it can be large.
+    async fn publish_recipe_list(&mut self) {
+        let list: Vec<serde_json::Value> = self
+            .options
+            .iter()
+            .filter_map(|(title, id)| {
+                let recipe = self.recipes.iter().find(|r| &r.id == id)?;
+                Some(serde_json::json!({ "title": title, "stages": recipe.stages }))
+            })
+            .collect();
+        let payload = serde_json::json!({ "recipes": list }).to_string();
+        if self.last_recipes.as_deref() != Some(payload.as_str()) {
+            self.publish(self.topics.recipes_attributes(), true, payload.clone())
+                .await;
+            self.last_recipes = Some(payload);
+        }
+    }
+
+    fn option_id(&self, title: &str) -> Option<String> {
+        self.options
+            .iter()
+            .find(|(t, _)| t == title)
+            .map(|(_, id)| id.clone())
+    }
+
+    /// `{"title": "…", "stages": […]}` saves a new recipe; with
+    /// `"replace": "<option>"` it overwrites the recipe behind that option.
+    async fn save_recipe(&mut self, text: &str, sources: &Sources) {
+        let Some(files) = &sources.recipe_files else {
+            self.command_failed("save_recipe", "recipes are read-only in cloud mode")
+                .await;
+            return;
+        };
+        let request: SaveRecipe = match serde_json::from_str(text) {
+            Ok(r) => r,
+            Err(e) => {
+                self.command_failed("save_recipe", &format!("bad payload: {e}"))
+                    .await;
+                return;
+            }
+        };
+        let result = match request.replace.as_deref().and_then(|t| self.option_id(t)) {
+            Some(id) => files.update(
+                &id,
+                RecipePatch {
+                    title: Some(request.title),
+                    stages: Some(request.stages),
+                },
+            ),
+            None => files.create(RecipeDraft {
+                title: request.title,
+                stages: request.stages,
+            }),
+        };
+        match result {
+            Ok(recipe) => {
+                info!(title = %recipe.title, "[mqtt] saved recipe");
+                refresh_recipes(sources).await;
+            }
+            Err(e) => self.command_failed("save_recipe", &recipe_error_text(e)).await,
+        }
+    }
+
+    /// The payload is the recipe's select option.
+    async fn delete_recipe(&mut self, text: &str, sources: &Sources) {
+        let Some(files) = &sources.recipe_files else {
+            self.command_failed("delete_recipe", "recipes are read-only in cloud mode")
+                .await;
+            return;
+        };
+        let Some(id) = self.option_id(text) else {
+            self.command_failed("delete_recipe", "no recipe with that title")
+                .await;
+            return;
+        };
+        match files.delete(&id) {
+            Ok(()) => {
+                info!(title = %text, "[mqtt] deleted recipe");
+                refresh_recipes(sources).await;
+            }
+            Err(e) => self.command_failed("delete_recipe", &recipe_error_text(e)).await,
+        }
     }
 
     async fn publish_selected(&self) {
@@ -302,6 +395,7 @@ impl Processor {
             self.publish_recipes().await;
         } else if model.recipes.len() == self.recipes.len() {
             self.recipes = model.recipes.clone();
+            self.publish_recipe_list().await;
         }
 
         let connected = sources.liveness.connected();
@@ -418,6 +512,14 @@ impl Processor {
                 }
             }
             "stop" => StateMachineCommand::StopCook { reply: reply_tx },
+            "save_recipe" => {
+                self.save_recipe(&text, sources).await;
+                return;
+            }
+            "delete_recipe" => {
+                self.delete_recipe(&text, sources).await;
+                return;
+            }
             other => {
                 let request = match control_request(other, &text) {
                     Ok(request) => request,
@@ -469,6 +571,37 @@ fn broker_address(url: &str) -> Result<(String, u16), String> {
 }
 
 /// A control command from its topic name and payload.
+/// The `save_recipe` command's payload.
+#[derive(serde::Deserialize)]
+struct SaveRecipe {
+    title: String,
+    stages: Vec<anova_oven_api::Stage>,
+    #[serde(default)]
+    replace: Option<String>,
+}
+
+fn recipe_error_text(e: RecipeError) -> String {
+    match e {
+        RecipeError::Invalid(msg) => msg,
+        RecipeError::NotFound => "recipe not found".into(),
+        other => format!("{other:?}"),
+    }
+}
+
+/// Ask the state machine to re-read the recipes, so the select and the
+/// Recipes sensor follow a save or a delete.
+async fn refresh_recipes(sources: &Sources) {
+    let (reply_tx, _reply_rx) = oneshot::channel();
+    if sources
+        .sm_cmd_tx
+        .send(StateMachineCommand::RefreshRecipes { reply: reply_tx })
+        .await
+        .is_err()
+    {
+        warn!("[mqtt] couldn't refresh recipes after a write");
+    }
+}
+
 /// A manual cook from the `start` command's `{"stages": […], "title": "…"}`,
 /// with the same checks as a saved recipe.
 fn manual_cook(json: &serde_json::Value) -> Result<(String, Vec<anova_oven_api::Stage>), String> {
