@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.1
+
+- The cog no longer shows as selected while the presets are open.
+
 ## 0.9.0
 
 - Presets: the book button at the left of the steps row opens them.
