@@ -36,18 +36,21 @@ title: Oven
 ```
 
 The card follows Home Assistant's tile card. Under the header (oven state,
-door, light) it always shows the same four rows, so it never changes size:
+door, light) it always shows the same five rows, so it never changes size:
 
-1. Heating mode: the handle's four modes (top, top and bottom, bottom,
-   rear with fan). During a cook, this row shows the progress.
-2. Temperature (`-  180 °C  +`) and the sous vide toggle.
-3. Timer and steam, each `-  value  +`. Hold - or + to change fast.
-4. Start. During a cook: Stop (tap twice), and Next stage when a stage
+1. Heating elements: any one or two of top, bottom and rear (six choices).
+   During a cook, this row shows the progress.
+2. Temperature: drag the slider, or tap - and +. The toggle next to it
+   switches sous vide on (25-100 °C, steam 100 %) or off (bake).
+3. How the cook ends: until you stop, a timer, or a probe temperature,
+   with - and + for the time or the probe target.
+4. Steam (- and +), and the preheat toggle. With preheat on, the oven
+   heats up first and the cook (and its timer) starts at temperature.
+5. Start. During a cook: Stop (tap twice), and Next stage when a stage
    waits for you.
 
-With a timer, the oven preheats first and the timer starts at
-temperature. During a cook, - and + change the temperature and the timer
-of the running cook.
+During a cook, the slider and - and + change the running cook's
+temperature, and - and + change a running timer.
 
 ## Data
 
