@@ -105,7 +105,20 @@ def message(hass, a):
         if auto_stop_on(hass):
             return title, "Timer done. The oven stopped."
         return title, "Timer done. The oven holds the temperature until you tap Stop."
+    if kind == "temp_reached":
+        target = a.get("target_c")
+        if target is None:
+            return title, "The oven is at temperature."
+        degrees = f"{target:.1f}" if a.get("wet") else f"{round(target)}"
+        return title, f"The oven is at {degrees} °C."
+    if kind == "water_empty":
+        return title, "The water tank is empty. Fill it to keep the steam going."
     if kind == "cook_stopped":
+        reason = a.get("reason") or {}
+        if reason.get("kind") == "safety_limit":
+            hours = reason.get("hours") or 0
+            return title, (f"Safety stop: the oven ran {hours:g} h with no timer, "
+                           "so the App stopped it.")
         return title, "The cook stopped."
     if kind == "oven_lost":
         return title, "The oven went offline during a cook. It may still run."

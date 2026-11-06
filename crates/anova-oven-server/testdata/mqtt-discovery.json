@@ -296,7 +296,9 @@
       "cook_done",
       "cook_stopped",
       "command_failed",
-      "oven_lost"
+      "oven_lost",
+      "temp_reached",
+      "water_empty"
     ],
     "has_entity_name": true,
     "name": "Cook",

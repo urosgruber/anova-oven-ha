@@ -41,6 +41,22 @@ App stops it when the last timer ends, also for a cook started on the
 oven. Turn it on or off in the card's cog panel, or with the "Auto stop"
 switch of the Anova Oven device.
 
+### Safety limit
+
+The App stops a dry cook that nothing ends after 4 hours. "Nothing ends"
+means one of these:
+
+- The step has no timer and no probe target ("until you stop").
+- The last timer ended, and the oven holds the temperature (Auto stop
+  off).
+
+The clock starts again for each new step. Sous vide has no limit, because
+a sous vide cook can run 24 hours or more. A cook with a timer has no
+limit while its timer runs. To cook longer, set a timer. Change the hours
+with the `safety_limit_hours` option on the App's Configuration tab. `0`
+turns the limit off. The limit works only while MQTT is on. A restart of
+the App starts the clock again.
+
 ## Notifications
 
 The App sends the oven's events to phones with the Home Assistant
@@ -49,11 +65,18 @@ Companion app:
 | Event | Notification |
 |---|---|
 | Preheat done | "Preheat done. The oven is at temperature." |
+| A step without preheat reaches its temperature | "The oven is at 200 °C." |
+| The water tank is empty during a steam or sous vide step | "The water tank is empty. Fill it to keep the steam going." |
 | A step starts | "Step 2 of 3 started: …" |
 | A step waits for you | "Step 2 waits for you. Tap Start step 2." |
 | The last timer ends | "Timer done. The oven stopped." (with Auto stop) |
 | The cook stops | "The cook stopped." |
+| The safety limit stops the cook | "Safety stop: the oven ran 4 h with no timer, so the App stopped it." |
 | The oven goes offline during a cook | "The oven went offline during a cook. It may still run." |
+
+"Reached its temperature" means within 2 °C of the target (0.5 °C in sous
+vide). It comes once per step. When the door opens and the temperature
+falls, it does not come again.
 
 A cook started from the dashboard card notifies the person who started
 it. A cook started on the oven notifies everyone. A person's phones are

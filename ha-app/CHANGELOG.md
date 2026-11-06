@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.15.0
+
+- New notification: "The oven is at 200 °C." It comes when a step
+  without preheat reaches its temperature, once per step.
+- New notification: the water tank is empty during a steam or sous vide
+  step.
+- Safety limit: the App stops a dry cook that nothing ends after 4 hours.
+  This is a step with no timer and no probe, or a cook that holds the
+  temperature after its last timer. Sous vide has no limit. Change the
+  hours with the new `safety_limit_hours` option; `0` turns it off.
+- The timer takes seconds: type 3m30s, 3m30, 3.5 or 210s. 1:30 is still
+  1 hour 30 minutes.
+- The progress bar no longer jumps back and forth during a timer. The
+  App kept moving the end time between two reports from the oven.
+
 ## 0.14.0
 
 - Notifications on your phone (Home Assistant Companion app): preheat
