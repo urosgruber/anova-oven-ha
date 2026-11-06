@@ -24,9 +24,10 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.11.2";
+const CARD_VERSION = "0.11.3";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
+const NO_END = "Until you stop";
 const SETUP_KEY = "anova-oven-card:setup";
 // A cool-down stage: the rear element with a 25 °C target. The heaters stay
 // off while the oven is hotter, the fan runs, and the vent is open.
@@ -51,7 +52,7 @@ const MODES = [
   { key: "rear_bottom", label: "Rear and bottom", elements: ["rear", "bottom"] },
 ];
 const ENDS = [
-  { key: "none", label: "Until you stop", icon: "mdi:all-inclusive" },
+  { key: "none", label: NO_END, icon: "mdi:all-inclusive" },
   { key: "timer", label: "Timer", icon: "mdi:timer-outline" },
   { key: "probe", label: "Probe", icon: "mdi:thermometer-probe" },
 ];
@@ -454,7 +455,7 @@ class AnovaOvenCard extends HTMLElement {
               html: `<ha-icon icon="${e.icon}"></ha-icon>`, disabled: e.key === "probe" && m.probe === null && s.end !== "probe" })),
               live ? (m.timerTotal ? "timer" : m.probe !== null ? "probe" : "none") : s.end, off || live)}
             ${stepper("end", endValue(m, s), endDisabled(m, s, off), null,
-              { editable: !endDisabled(m, s, off), editTitle: "Tap to type: minutes (90), 1h30 or 1:30" })}
+              { buttons: endValue(m, s) !== NO_END, editable: !endDisabled(m, s, off), editTitle: "Tap to type: minutes (90), 1h30 or 1:30" })}
           </div>
 
           <div class="pair go">
@@ -707,7 +708,7 @@ class AnovaOvenCard extends HTMLElement {
       // While cooking, the fill is the oven's temperature; dragging moves
       // the target mark.
       const mark = $(`${what}-mark`);
-      if (mark) mark.style.left = pct((v - o.lo) / (o.hi - o.lo));
+      if (mark) mark.style.left = markLeft((v - o.lo) / (o.hi - o.lo));
       else $(`${what}-fill`).style.width = pct((v - o.lo) / (o.hi - o.lo));
       $(`${what}-value`).textContent = o.label(v);
     };
@@ -781,13 +782,14 @@ function select(name, options, current, disabled) {
 
 // HA's number-buttons feature: [ -   value   + ] in one 42 px row.
 function stepper(what, value, disabled, icon, opts = {}) {
+  const buttons = opts.buttons !== false;
   return `
-    <div class="feature stepper ${disabled ? "disabled" : ""}">
-      <button class="pm" data-step="${what}:-1" aria-label="Less" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:minus"></ha-icon></button>
+    <div class="feature stepper ${disabled ? "disabled" : ""} ${buttons ? "" : "bare"}">
+      ${buttons ? `<button class="pm" data-step="${what}:-1" aria-label="Less" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:minus"></ha-icon></button>` : ""}
       ${opts.editable
         ? `<button class="value editable" id="${what}-edit" title="${esc(opts.editTitle || "Tap to type")}">${icon ? `<ha-icon icon="${icon}"></ha-icon>` : ""}<span id="${what}-value">${esc(value)}</span></button>`
         : `<span class="value">${icon ? `<ha-icon icon="${icon}"></ha-icon>` : ""}<span id="${what}-value">${esc(value)}</span></span>`}
-      <button class="pm" data-step="${what}:1" aria-label="More" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:plus"></ha-icon></button>
+      ${buttons ? `<button class="pm" data-step="${what}:1" aria-label="More" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:plus"></ha-icon></button>` : ""}
     </div>`;
 }
 
@@ -800,11 +802,17 @@ function slider(what, f, label, disabled, opts = {}) {
       ${buttons ? `<button class="pm" data-step="${what}:-1" aria-label="Lower" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:minus"></ha-icon></button>` : ""}
       <div class="track" id="${what}-track" role="slider" aria-valuetext="${esc(label)}">
         <div class="fill ${opts.mark !== undefined ? "current" : ""}" id="${what}-fill" style="width:${pct(f)}"></div>
-        ${opts.mark !== undefined ? `<div class="mark" id="${what}-mark" style="left:${pct(opts.mark)}"></div>` : ""}
+        ${opts.mark !== undefined ? `<div class="mark" id="${what}-mark" style="left:${markLeft(opts.mark)}"></div>` : ""}
         <span class="track-value" id="${what}-value">${esc(label)}</span>
       </div>
       ${buttons ? `<button class="pm" data-step="${what}:1" aria-label="Higher" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:plus"></ha-icon></button>` : ""}
     </div>`;
+}
+
+// The mark's centre, kept 6 px inside the track so the track never clips it
+// at 0 or 100 %.
+function markLeft(f) {
+  return `calc(6px + (100% - 12px) * ${clamp(f, 0, 1)})`;
 }
 
 function steamFraction(m, s) {
@@ -824,11 +832,11 @@ function endValue(m, s) {
     const left = remaining(m);
     if (left !== null) return clock(left);
     if (m.probe !== null) return `Probe ${Math.round(m.probe)} °C`;
-    return "Until you stop";
+    return NO_END;
   }
   if (s.end === "timer") return clock(s.timer * 60);
   if (s.end === "probe") return m.probe === null ? "Plug in the probe" : `Probe to ${s.probe} °C`;
-  return "Until you stop";
+  return NO_END;
 }
 
 function endDisabled(m, s, off) {
@@ -1203,7 +1211,7 @@ const STYLE = `
     font-size: 14px; font-weight: 500; color: var(--primary-text-color); white-space: nowrap; overflow: hidden;
     font-variant-numeric: tabular-nums; }
   .stepper .value ha-icon { --mdc-icon-size: 16px; color: var(--secondary-text-color); }
-  .stepper.disabled .pm, .stepper.disabled .value, .slider.disabled .pm, .slider.disabled .track { opacity: .4; }
+  .stepper.disabled .pm, .stepper.disabled:not(.bare) .value, .slider.disabled .pm, .slider.disabled .track { opacity: .4; }
   .track { position: relative; flex: 1; align-self: stretch; margin: 6px 0; border-radius: 8px; overflow: hidden;
     background: rgba(var(--oven-rgb), .14); cursor: pointer; touch-action: none; user-select: none; }
   .slider.disabled .track { cursor: default; }
