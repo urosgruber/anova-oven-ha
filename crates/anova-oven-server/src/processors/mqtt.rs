@@ -119,6 +119,7 @@ pub async fn run(config: MqttConfig, mut sources: Sources) {
         options: Vec::new(),
         selected: None,
         last_state: None,
+        last_cook: None,
         last_recipes: None,
         last_snapshot: None,
         next_stage_ready: None,
@@ -201,6 +202,8 @@ struct Processor {
     /// survives an HA restart and a stale select can't start the wrong one.
     selected: Option<String>,
     last_state: Option<String>,
+    /// The running cook's stages payload last published.
+    last_cook: Option<String>,
     /// The recipes-with-stages payload last published.
     last_recipes: Option<String>,
     /// `None` until the first snapshot, which is the baseline: a restart
@@ -241,6 +244,7 @@ impl Processor {
         self.last_recipes = None;
         self.publish_recipes().await;
         self.last_state = None;
+        self.last_cook = None;
         self.next_stage_ready = None;
         self.on_change(sources, true).await;
     }
@@ -413,6 +417,15 @@ impl Processor {
         if force || self.last_state.as_deref() != Some(state.as_str()) {
             self.publish(self.topics.state(), true, state.clone()).await;
             self.last_state = Some(state);
+        }
+
+        // Every dashboard shows the stages, not only the one that started
+        // the cook. An empty list when no cook runs.
+        let stages = model.current_cook.as_ref().map_or(&[][..], |c| &c.stages[..]);
+        let cook = serde_json::json!({ "stages": stages }).to_string();
+        if force || self.last_cook.as_deref() != Some(cook.as_str()) {
+            self.publish(self.topics.cook_attributes(), true, cook.clone()).await;
+            self.last_cook = Some(cook);
         }
 
         let snapshot = Snapshot::new(status.as_ref(), model.current_cook.as_ref(), connected);

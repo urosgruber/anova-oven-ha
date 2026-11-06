@@ -24,13 +24,10 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.11.0";
+const CARD_VERSION = "0.11.1";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
-// The last program this browser started: titles and stages, so the chips of
-// a running cook can show each stage's temperature.
-const STARTED_KEY = "anova-oven-card:started";
 // A cool-down stage: the rear element with a 25 °C target. The heaters stay
 // off while the oven is hotter, the fan runs, and the vent is open.
 const COOL_C = 25;
@@ -193,7 +190,6 @@ class AnovaOvenCard extends HTMLElement {
   }
 
   _publishStart(title, stages) {
-    saveStarted({ title, stages });
     this._call("mqtt", "publish", {
       topic: `${this._config.mqtt_prefix}/cmd/start`,
       payload: JSON.stringify({ title, stages }),
@@ -369,6 +365,8 @@ class AnovaOvenCard extends HTMLElement {
       stage: this._value("sensor", "stage"),
       stageDescription: this._value("sensor", "stage_description"),
       recipe: this._value("sensor", "current_recipe"),
+      // The running cook's stages, from the server (the same on every device).
+      stages: (this._state("sensor", "current_recipe") || {}).attributes?.stages,
       nextReady: this._on("binary_sensor", "next_stage_ready"),
       door: this._on("binary_sensor", "door"),
       lamp: this._on("light", "lamp"),
@@ -990,8 +988,7 @@ function stepChips(s, off) {
 // While cooking: the running cook's stages, done ones ticked.
 function runningChips(m) {
   const { cur, total } = stagePos(m);
-  const started = loadStarted();
-  const known = started && started.title === m.recipe && started.stages.length === total ? started.stages : null;
+  const known = Array.isArray(m.stages) && m.stages.length === total ? m.stages : null;
   const chips = Array.from({ length: total }, (_, i) => {
     const n = i + 1;
     const state = n < cur || (m.done && n === cur) ? "done" : n === cur ? "on" : "";
@@ -1115,17 +1112,6 @@ function loadSetup() {
     }
   } catch (_) { /* no storage */ }
   return { ...DEFAULT_SETUP, steps: [{ ...DEFAULT_STEP }] };
-}
-
-function loadStarted() {
-  try {
-    const v = JSON.parse(localStorage.getItem(STARTED_KEY) || "null");
-    return v && v.title && Array.isArray(v.stages) ? v : null;
-  } catch (_) { return null; }
-}
-
-function saveStarted(v) {
-  try { localStorage.setItem(STARTED_KEY, JSON.stringify(v)); } catch (_) { /* no storage */ }
 }
 
 function saveSetup(s) {
