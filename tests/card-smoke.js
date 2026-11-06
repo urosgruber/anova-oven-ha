@@ -308,6 +308,10 @@ function programFromStagesForTest(card) {
   c = new Card(); c.setConfig({}); c.hass = h;
   let o = c.shadowRoot.innerHTML;
   check("no end: the time counts up", /12:3\d in/.test(o) && /Since \d\d:\d\d/.test(o) && !o.includes('data-step="end:'));
+  // After the oven's own preheat: count from the step's start, as the oven does.
+  h.states[`binary_sensor.${P}_connected`].attributes = { stage_started_at: new Date(Date.now() - 157000).toISOString() };
+  c = new Card(); c.setConfig({}); c.hass = h; o = c.shadowRoot.innerHTML;
+  check("no end: counts from the step's start", /2:3[67] in/.test(o));
   // Sous vide: the wet bulb and the stage's target, in 0.1 °C steps.
   h = hass({ ...base, "sensor.wet_bulb_temperature": "55.43", "sensor.target_temperature": "unknown" });
   h.states[`sensor.${P}_current_recipe`].attributes = { stages: [{ kind: "cook", temperature_c: 56.5, temperature_bulbs_mode: "wet", steam_pct: 100 }] };

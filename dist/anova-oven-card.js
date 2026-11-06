@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.15.1";
+const CARD_VERSION = "0.15.2";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -412,6 +412,10 @@ class AnovaOvenCard extends HTMLElement {
       // When this browser's clock saw the cook start (HA's last change of
       // the Cooking sensor). An HA restart mid-cook resets it.
       cookStart: cooking ? Date.parse((this._state("binary_sensor", "cooking") || {}).last_changed) || null : null,
+      // When the running step started, from the App (0.15.2+). The oven
+      // counts up from there, after its preheat. Unknown when the App
+      // started during the step.
+      stageStart: cooking && last.stage_started_at ? Date.parse(last.stage_started_at) || null : null,
       // null when the App has no Auto stop switch (older App).
       autoStop: this._value("switch", "auto_stop") === null ? null : this._on("switch", "auto_stop"),
       probe: this._number("sensor", "probe_temperature"),
@@ -958,7 +962,8 @@ function endValue(m, s) {
     const left = remaining(m);
     if (left !== null) return clock(left);
     if (m.probe !== null) return `Probe ${Math.round(m.probe)} °C`;
-    return m.cookStart ? `${clock(Math.max(0, Math.round((Date.now() - m.cookStart) / 1000)))} in` : NO_END;
+    const since = m.stageStart || m.cookStart;
+    return since ? `${clock(Math.max(0, Math.round((Date.now() - since) / 1000)))} in` : NO_END;
   }
   if (s.end === "timer") return clock(Math.round(s.timer * 60));
   if (s.end === "probe") return m.probe === null ? "Plug in the probe" : `Probe to ${s.probe} °C`;
@@ -1249,7 +1254,7 @@ function barLabel(m) {
   const rem = remaining(m);
   const end = m.autoStop && stagePos(m).cur === stagePos(m).total ? "Stops" : "Ends";
   const right = m.done || m.nextReady ? "" : rem !== null ? `${end} ${hhmm(Date.now() + rem * 1000)}`
-    : m.cookStart ? `Since ${hhmm(m.cookStart)}` : "";
+    : m.stageStart || m.cookStart ? `Since ${hhmm(m.stageStart || m.cookStart)}` : "";
   return `<span>${esc(left)}</span><span>${esc(right)}</span>`;
 }
 
