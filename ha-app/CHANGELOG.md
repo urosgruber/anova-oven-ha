@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.3
+
+- The timer on the card ticks evenly, one second at a time. Before, it
+  sometimes showed the same second twice or skipped one. This was true
+  for the countdown and for the count-up of a cook with no timer.
+
 ## 0.15.2
 
 - A cook started on the oven: the card counts up from the start of the

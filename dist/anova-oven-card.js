@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.15.2";
+const CARD_VERSION = "0.15.3";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -149,12 +149,19 @@ class AnovaOvenCard extends HTMLElement {
       });
       this._ro.observe(this);
     }
-    this._tick = setInterval(() => this._renderLive(), 1000);
+    // Tick just after each full second. A plain 1 s interval drifts, and a
+    // tick near a second's edge showed the same second twice or skipped one.
+    const tick = () => {
+      this._renderLive();
+      this._tick = setTimeout(tick, 1000 - (Date.now() % 1000) + 20);
+    };
+    clearTimeout(this._tick);
+    this._tick = setTimeout(tick, 1000 - (Date.now() % 1000) + 20);
   }
 
   disconnectedCallback() {
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
-    clearInterval(this._tick);
+    clearTimeout(this._tick);
   }
 
   // --- Entity helpers -----------------------------------------------------
@@ -963,7 +970,7 @@ function endValue(m, s) {
     if (left !== null) return clock(left);
     if (m.probe !== null) return `Probe ${Math.round(m.probe)} °C`;
     const since = m.stageStart || m.cookStart;
-    return since ? `${clock(Math.max(0, Math.round((Date.now() - since) / 1000)))} in` : NO_END;
+    return since ? `${clock(elapsed(since))} in` : NO_END;
   }
   if (s.end === "timer") return clock(Math.round(s.timer * 60));
   if (s.end === "probe") return m.probe === null ? "Plug in the probe" : `Probe to ${s.probe} °C`;
@@ -1177,8 +1184,16 @@ function timerStep(minutes, dir) {
   return at < 10 ? 1 : at < 60 ? 5 : 15;
 }
 
+// Seconds left, rounded up: the last second shows 0:01, as on the oven.
 function remaining(m) {
-  return m.endsAt ? Math.max(0, Math.round((m.endsAt - Date.now()) / 1000)) : null;
+  return m.endsAt ? Math.max(0, Math.ceil((m.endsAt - Date.now()) / 1000 - 0.05)) : null;
+}
+
+// Whole seconds since `since`, which is moved to its full second first.
+// With the tick just after each full second, the value goes up by one each
+// tick, never two, and never stays.
+function elapsed(since) {
+  return Math.max(0, Math.floor((Date.now() - Math.round(since / 1000) * 1000) / 1000));
 }
 
 function progress(m) {

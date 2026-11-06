@@ -374,3 +374,36 @@ function programFromStagesForTest(card) {
   h = next({ [`sensor.${P}_temperature`]: st("170") }); c.hass = h;
   check("no re-render while a button is held", renders === 1);
 }
+
+// --- 0.15.3: the time ticks one second per tick ---
+{
+  const src = require("fs").readFileSync(require("path").resolve(process.argv[2]), "utf8");
+  const a = src.indexOf("// Seconds left, rounded up"), b = src.indexOf("function progress");
+  const lib = new Function(`${src.slice(a, b)}; return { remaining, elapsed };`)();
+  const real = Date.now;
+  const base = Math.floor(real() / 1000) * 1000;
+  const endsAt = base + 600000, since = base - 100000 + 437; // a cook start with milliseconds
+  let downs = [], ups = [];
+  for (let k = 1; k <= 300; k++) {
+    // Ticks 20 ms after each second, with up to ±15 ms of delay.
+    const t = base + k * 1000 + 20 + Math.round(Math.sin(k * 7.3) * 15);
+    Date.now = () => t;
+    downs.push(lib.remaining({ endsAt })); ups.push(lib.elapsed(since));
+  }
+  Date.now = real;
+  const steps = (xs) => xs.slice(1).map((x, i) => x - xs[i]);
+  check("the countdown goes down by 1 s at every tick", steps(downs).every((d) => d === -1));
+  check("the count-up goes up by 1 s at every tick", steps(ups).every((d) => d === 1));
+  Date.now = () => endsAt - 400; check("the last second shows 1, not 0", lib.remaining({ endsAt }) === 1);
+  Date.now = real;
+}
+{
+  // The card schedules its tick 20 ms after the next full second.
+  const realTimeout = global.setTimeout, realNow = Date.now;
+  const delays = [];
+  global.setTimeout = (fn, ms) => { delays.push(ms); return 1; };
+  Date.now = () => 1700000000000 + 730;
+  const c = new Card(); c.setConfig({}); c.hass = hass(); c.connectedCallback();
+  global.setTimeout = realTimeout; Date.now = realNow;
+  check("the tick lands just after the next full second", delays.at(-1) === 290);
+}
