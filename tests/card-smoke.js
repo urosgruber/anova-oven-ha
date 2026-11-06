@@ -173,6 +173,11 @@ function programFromStagesForTest(card) {
   check("running chips show stage temperatures and a snowflake", o.includes("176°") && o.includes("mdi:snowflake"));
   const c8 = new Card(); c8.setConfig({}); c8.hass = h6;
   check("another device shows the same stage temperatures", c8.shadowRoot.innerHTML.includes("176°") && c8.shadowRoot.innerHTML.includes("mdi:snowflake"));
+  c6._step("end", 1, c6._model());
+  const plus = h6.calls.at(-1).data;
+  check("+ on a running timer adds 5 min to the time left", plus.topic === "anova/oven/cmd/timer" && Math.abs(Number(plus.payload) - 1037) <= 2);
+  c6._step("end", -1, c6._model());
+  check("- on a running timer takes 5 min from the time left", Math.abs(Number(h6.calls.at(-1).data.payload) - 437) <= 2);
   c6._nextStage();
   check("skip publishes cmd/next_stage", h6.calls.at(-1).data.topic === "anova/oven/cmd/next_stage");
   h6 = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "1 of 2", "binary_sensor.next_stage_ready": "on",

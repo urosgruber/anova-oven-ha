@@ -24,7 +24,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.11.1";
+const CARD_VERSION = "0.11.2";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
@@ -331,9 +331,12 @@ class AnovaOvenCard extends HTMLElement {
     if (m.cooking) {
       // On a running cook, each step is one command to the oven.
       if (what === "temp" && m.target !== null) this._setTarget(m.target + dir * 5);
-      if (what === "end" && m.timerTotal) {
-        this._call("number", "set_value", { entity_id: this._id("number", "set_timer"),
-          value: clamp(Math.round(m.timerTotal / 60) + dir * 5, 1, 1440) });
+      // The oven restarts its countdown from the value it gets, so add to
+      // or take from the time left, not the stage's total.
+      const left = remaining(m);
+      if (what === "end" && left !== null) {
+        this._call("mqtt", "publish", { topic: `${this._config.mqtt_prefix}/cmd/timer`,
+          payload: String(clamp(left + dir * 300, 60, 1440 * 60)) });
       }
       return;
     }

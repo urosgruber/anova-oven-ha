@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.2
+
+- Fix the timer's - and + during a cook. They now add or take 5 minutes
+  from the time left. Before, they used the step's total time, and the
+  oven restarts its countdown from the value it gets. So with 6 minutes
+  left of 15, + set 20 minutes left, and - set 10 minutes left.
+
 ## 0.11.1
 
 - During a cook, every phone and browser shows the stage temperatures in
