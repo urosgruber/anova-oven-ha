@@ -25,6 +25,7 @@ COPY --from=build /src/target/release/anova-oven-server /usr/bin/anova-oven-serv
 # cached Rust build above, so it releases in about a minute.
 COPY dist/anova-oven-card.js /usr/share/anova-oven/anova-oven-card.js
 COPY ha-app/register_card.py /register_card.py
+COPY ha-app/notify.py /notify.py
 COPY ha-app/run.sh /run.sh
 RUN chmod a+x /run.sh
 

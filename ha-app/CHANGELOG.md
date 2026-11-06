@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0
+
+- Notifications on your phone (Home Assistant Companion app): preheat
+  done, a step starts, a step waits for you, timer done, the cook stopped,
+  and the oven offline during a cook. A cook started from the card
+  notifies the person who started it. A cook started on the oven notifies
+  everyone. Turn them off with the new `notify` option.
+- Play in the presets now starts the preset's steps directly, the same way
+  as Bake / Cook.
+
 ## 0.13.0
 
 - Auto stop: the App stops the oven when the last timer of a cook ends.

@@ -120,6 +120,8 @@ pub async fn run(config: MqttConfig, mut sources: Sources) {
         selected: None,
         last_state: None,
         auto_stop: true,
+        pending_started_by: None,
+        started_by: None,
         last_cook: None,
         last_recipes: None,
         last_snapshot: None,
@@ -206,6 +208,12 @@ struct Processor {
     /// Stop the oven at `cook_done`. On until the retained command says
     /// otherwise.
     auto_stop: bool,
+    /// The Home Assistant user of the last `start` command, until the cook
+    /// it started begins.
+    pending_started_by: Option<String>,
+    /// Who started the running cook; `None` for a cook started on the oven.
+    /// Every event carries it, so a notification can go to that person.
+    started_by: Option<String>,
     /// The running cook's stages payload last published.
     last_cook: Option<String>,
     /// The recipes-with-stages payload last published.
@@ -443,11 +451,14 @@ impl Processor {
         }
 
         let mut done = false;
-        if let Some(prev) = &self.last_snapshot {
-            for milestone in milestones::milestones(prev, &snapshot) {
+        if let Some(prev) = self.last_snapshot.take() {
+            for milestone in milestones::milestones(&prev, &snapshot) {
                 done |= milestone == Milestone::CookDone;
+                if milestone == Milestone::CookStarted {
+                    self.started_by = self.pending_started_by.take();
+                }
                 let source = if milestone.describes_previous() {
-                    prev
+                    &prev
                 } else {
                     &snapshot
                 };
@@ -489,8 +500,9 @@ impl Processor {
         }
     }
 
-    async fn event(&self, milestone: Milestone, payload: serde_json::Value) {
+    async fn event(&self, milestone: Milestone, mut payload: serde_json::Value) {
         info!(event = milestone.as_str(), "[mqtt] milestone");
+        payload["started_by"] = self.started_by.clone().into();
         self.publish(self.topics.event(), false, payload.to_string())
             .await;
     }
@@ -535,6 +547,9 @@ impl Processor {
                 // dashboard card), `{"recipe_id": "…"}`, or anything else (a
                 // button's `PRESS`) for the selected recipe.
                 let json = serde_json::from_str::<serde_json::Value>(&text).ok();
+                self.pending_started_by = json
+                    .as_ref()
+                    .and_then(|v| v.get("started_by")?.as_str().map(String::from));
                 if let Some(json) = json.as_ref().filter(|v| v.get("stages").is_some()) {
                     match manual_cook(json) {
                         Ok((title, stages)) => StateMachineCommand::StartManualCook {
@@ -602,7 +617,12 @@ impl Processor {
         }
         match reply_rx.await {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => self.command_failed(&name, &e.to_string()).await,
+            Ok(Err(e)) => {
+                if name == "start" {
+                    self.pending_started_by = None;
+                }
+                self.command_failed(&name, &e.to_string()).await
+            }
             Err(_) => {
                 self.command_failed(&name, "state machine dropped the reply")
                     .await

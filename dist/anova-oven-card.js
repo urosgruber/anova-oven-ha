@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.13.0";
+const CARD_VERSION = "0.14.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -199,10 +199,12 @@ class AnovaOvenCard extends HTMLElement {
     this._publishStart(programTitle(this._setup), programStages(this._setup));
   }
 
+  // The HA user goes with the start, so the App can notify that person.
   _publishStart(title, stages) {
+    const started_by = this._hass.user ? this._hass.user.id : undefined;
     this._call("mqtt", "publish", {
       topic: `${this._config.mqtt_prefix}/cmd/start`,
-      payload: JSON.stringify({ title, stages }),
+      payload: JSON.stringify({ title, stages, started_by }),
     });
   }
 
@@ -742,10 +744,9 @@ class AnovaOvenCard extends HTMLElement {
     const recipes = this._panel === "presets" ? this._recipes() : [];
     root.querySelectorAll("[data-load]").forEach((b) => { b.onclick = () => this._loadPreset(recipes[Number(b.dataset.load)]); });
     root.querySelectorAll("[data-run]").forEach((b) => {
-      b.onclick = async () => {
+      b.onclick = () => {
         const r = recipes[Number(b.dataset.run)];
-        await this._call("select", "select_option", { entity_id: this._id("select", "recipe"), option: r.title });
-        await this._call("button", "press", { entity_id: this._id("button", "start") });
+        this._publishStart(r.title, r.stages);
         this._panel = null;
         this._render();
       };
