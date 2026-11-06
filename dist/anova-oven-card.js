@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.12.3";
+const CARD_VERSION = "0.12.4";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -340,7 +340,7 @@ class AnovaOvenCard extends HTMLElement {
     const s = this._view();
     if (m.cooking) {
       // On a running cook, each step is one command to the oven.
-      if (what === "temp" && m.target !== null) this._setTarget(m.target + dir * 5);
+      if (what === "temp" && m.target !== null) this._setTarget(m.target + dir);
       // The oven restarts its countdown from the value it gets, so add to
       // or take from the time left, not the stage's total.
       const left = remaining(m);
@@ -350,13 +350,22 @@ class AnovaOvenCard extends HTMLElement {
       }
       return;
     }
-    if (what === "temp") this._update({ temp: s.temp + dir * (s.sousVide ? 0.5 : 5) });
+    if (what === "temp") this._update({ temp: s.temp + dir * (s.sousVide ? 0.5 : 1) });
     if (what === "end" && s.end === "timer") this._update({ timer: s.timer + dir * timerStep(s.timer, dir) });
     if (what === "end" && s.end === "probe") this._update({ probe: s.probe + dir });
     if (what === "steam") this._update({ steam: s.steam + dir * 10 });
   }
 
   // --- View model ---------------------------------------------------------
+
+  // The server sends the end time in whole seconds, computed at each state
+  // update, so it moves back and forth by a second. Keep the one we have
+  // unless the new one differs by more than 2 s (a real timer change).
+  _stableEnd(t) {
+    if (t === null) { this._endsAt = null; return null; }
+    if (this._endsAt == null || Math.abs(t - this._endsAt) > 2000) this._endsAt = t;
+    return this._endsAt;
+  }
 
   _model() {
     const link = this._state("binary_sensor", "connected");
@@ -391,7 +400,7 @@ class AnovaOvenCard extends HTMLElement {
       target: this._number("sensor", "target_temperature"),
       probe: this._number("sensor", "probe_temperature"),
       steam: this._number("sensor", "steam"),
-      endsAt: endsAt ? Date.parse(endsAt) : null,
+      endsAt: this._stableEnd(endsAt ? Date.parse(endsAt) : null),
       timerTotal: timerMin ? timerMin * 60 : null,
       stage: this._value("sensor", "stage"),
       stageDescription: this._value("sensor", "stage_description"),
@@ -437,7 +446,7 @@ class AnovaOvenCard extends HTMLElement {
           <div class="shape"><ha-icon icon="${live ? "mdi:stove" : "mdi:toaster-oven"}"></ha-icon></div>
           <div class="info">
             <div class="primary">${esc(this._config.title || "Oven")}</div>
-            <div class="secondary ${warning ? "warn" : ""}" id="secondary">${warning ? esc(warning + powerText(m)) : secondary(m) + esc(powerText(m))}</div>
+            <div class="secondary ${warning ? "warn" : ""}" id="secondary">${statusLine(m, warning)}</div>
           </div>
           <div class="icon-state ${off ? "unknown" : m.door ? "warn" : ""}" title="${off ? "Door: unknown (offline)" : m.door ? "Door open" : "Door closed"}">
             <ha-icon icon="${m.door ? "mdi:door-open" : "mdi:door-closed"}"></ha-icon>
@@ -483,9 +492,9 @@ class AnovaOvenCard extends HTMLElement {
 
             ${select("end", ENDS.map((e) => ({ key: e.key, label: e.key === "probe" && m.probe === null ? "Probe: plug the probe in to use it" : e.label,
               html: `<ha-icon icon="${e.icon}"></ha-icon>`, disabled: e.key === "probe" && m.probe === null && s.end !== "probe" })),
-              live ? (m.timerTotal ? "timer" : m.probe !== null ? "probe" : "none") : s.end, off || live)}
+              live ? liveEnd(m) : s.end, off || live)}
             ${stepper("end", endValue(m, s), endDisabled(m, s, off), null,
-              { buttons: endValue(m, s) !== NO_END, editable: !endDisabled(m, s, off), editTitle: "Tap to type: minutes (90), 1h30 or 1:30" })}
+              { buttons: endValue(m, s) !== NO_END && !m.done, editable: !endDisabled(m, s, off), editTitle: "Tap to type: minutes (90), 1h30 or 1:30" })}
           </div>
 
           <div class="pair go">
@@ -818,7 +827,7 @@ class AnovaOvenCard extends HTMLElement {
     if (!this.shadowRoot || !this._hass || this._holding) return;
     const m = this._model();
     const $ = (id) => this.shadowRoot.getElementById(id);
-    if (!warningText(m) && $("secondary")) $("secondary").innerHTML = secondary(m) + esc(powerText(m));
+    if (!warningText(m) && $("secondary")) $("secondary").innerHTML = statusLine(m, "");
     if (m.cooking) {
       if ($("bar")) $("bar").style.width = pct(progress(m));
       if ($("bar-label")) $("bar-label").innerHTML = barLabel(m);
@@ -874,13 +883,36 @@ function markLeft(f) {
   return `calc(6px + (100% - 12px) * ${clamp(f, 0, 1)})`;
 }
 
+// The running step, from the server's stages; null when unknown.
+function runningStage(m) {
+  const { cur, total } = stagePos(m);
+  return Array.isArray(m.stages) && m.stages.length === total ? m.stages[cur - 1] || null : null;
+}
+
+// How the running step ends. A finished timer stays "timer".
+function liveEnd(m) {
+  const st = runningStage(m);
+  if (st) return st.probe_added ? "probe" : st.timer_added || st.duration_secs ? "timer" : "none";
+  return m.timerTotal || m.done ? "timer" : m.probe !== null ? "probe" : "none";
+}
+
+// During a cook, the steam row shows the running step's steam setting. The
+// oven reports a humidity reading only in its relative-humidity mode; in
+// the steam-percentage mode the card uses, the reading stays 0.
 function steamFraction(m, s) {
-  if (m.cooking) return (m.steam || 0) / 100;
+  if (m.cooking) {
+    const st = runningStage(m);
+    return (st ? st.steam_pct || 0 : m.steam || 0) / 100;
+  }
   return (s.sousVide ? 100 : s.steam) / 100;
 }
 
 function steamLabel(m, s) {
-  if (m.cooking) return m.steam === null ? "Steam —" : `Steam ${Math.round(m.steam)} %`;
+  if (m.cooking) {
+    const st = runningStage(m);
+    if (st) return st.temperature_bulbs_mode === "wet" ? "100 % (sous vide)" : st.steam_pct ? `Steam ${Math.round(st.steam_pct)} %` : "No steam";
+    return m.steam === null ? "Steam —" : `Steam ${Math.round(m.steam)} %`;
+  }
   if (s.sousVide) return "100 % (sous vide)";
   return s.steam ? `Steam ${s.steam} %` : "No steam";
 }
@@ -1128,6 +1160,13 @@ function powerAction(m, idleW) {
   return { action: "restart", why: "Offline and idle: off for 10 s, then on. This often fixes the Wi-Fi." };
 }
 
+// The status line: the text shortens with "…", the power draw never does.
+function statusLine(m, warning) {
+  const main = warning ? esc(warning) : secondary(m);
+  const power = powerText(m);
+  return `<span class="sec-main">${main}</span>${power ? `<span class="sec-power">${esc(power)}</span>` : ""}`;
+}
+
 function powerText(m) {
   return m.watts === null ? "" : ` · ${fmtWatts(m.watts)}`;
 }
@@ -1157,11 +1196,11 @@ function barLabel(m) {
   const step = total > 1 ? `Step ${cur}/${total}` : "";
   const desc = /cool/i.test(m.stageDescription || "") ? "Cooling down" : m.phase === "Preheating" ? "Preheating" : "";
   let left;
-  if (m.done) left = "Done, still heating";
+  if (m.done) left = `Done · holding ${m.target !== null ? `${Math.round(m.target)} °C` : "the temperature"}`;
   else if (m.nextReady) left = `Step ${cur + 1} waits for you`;
   else left = [step, desc].filter(Boolean).join(" · ") || m.phase;
   const rem = remaining(m);
-  const right = m.done || m.nextReady ? "" : rem !== null ? `${clock(rem)} left` : "";
+  const right = m.done || m.nextReady ? "" : rem !== null ? `Ends ${hhmm(Date.now() + rem * 1000)}` : "";
   return `<span>${esc(left)}</span><span>${esc(right)}</span>`;
 }
 
@@ -1255,6 +1294,9 @@ const STYLE = `
   .primary { font-size: 14px; font-weight: 500; line-height: 20px; color: var(--primary-text-color); }
   .secondary { font-size: 12px; line-height: 16px; color: var(--secondary-text-color);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  .secondary { display: flex; min-width: 0; }
+  .secondary .sec-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .secondary .sec-power { flex: none; white-space: pre; }
   .secondary.warn { color: var(--error-color, #db4437); font-weight: 500; }
   .icon-state { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
     color: var(--secondary-text-color); }
