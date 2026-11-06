@@ -247,3 +247,15 @@ function programFromStagesForTest(card) {
   c = new Card(); c.setConfig({}); c.hass = withPlug({}, "on", 2);
   check("no plug configured: no power item, no watts", !tools(c).includes("Power <span") && !c.shadowRoot.innerHTML.includes(" W<"));
 }
+
+// --- 0.12.3: descale unknown, water tag only when empty ---
+{
+  const c = new Card(); c.setConfig({});
+  const h = hass({ "binary_sensor.descale_required": "off" }); c.hass = h;
+  c._panel = "maintenance"; c._render();
+  let o = c.shadowRoot.innerHTML;
+  check("descale off: not needed, and no water tag", o.includes(">not needed<") && !o.includes("Water <span"));
+  c.hass = hass({ "binary_sensor.descale_required": "unavailable", "binary_sensor.water_tank_empty": "on" });
+  o = c.shadowRoot.innerHTML;
+  check("descale unavailable: unknown; tank empty: water tag", o.includes(">unknown<") && o.includes('Water <span class="tag warn">empty'));
+}

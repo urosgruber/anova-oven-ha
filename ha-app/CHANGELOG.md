@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.12.3
+
+- The cog panel shows a water tag only when the oven reports its tank as
+  empty. Before, it showed "OK" at other times, but the oven only reports
+  "empty" or "not empty", and nobody has tested when it says "empty".
+- Descale shows "unknown" while its sensor is unavailable, for example
+  with the oven offline. Before, it showed "not needed".
+
 ## 0.12.2
 
 - The cog panel fits again without scrolling. Each item has one line of

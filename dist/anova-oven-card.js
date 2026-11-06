@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.12.2";
+const CARD_VERSION = "0.12.3";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -402,7 +402,8 @@ class AnovaOvenCard extends HTMLElement {
       door: this._on("binary_sensor", "door"),
       lamp: this._on("light", "lamp"),
       waterEmpty: this._on("binary_sensor", "water_tank_empty"),
-      descale: this._on("binary_sensor", "descale_required"),
+      // null while the sensor is unavailable, for example with the oven offline.
+      descale: this._value("binary_sensor", "descale_required") === null ? null : this._on("binary_sensor", "descale_required"),
     };
   }
 
@@ -613,8 +614,8 @@ class AnovaOvenCard extends HTMLElement {
         ${m.hasPlug ? this._powerItem(m) : ""}
         <div class="item" ${m.descale ? `title="Fill the tank with descaler and water, press the descale symbol on the oven, then Start on the handle."` : ""}>
           <div class="item-text">
-            <b>Descale <span class="tag ${m.descale ? "warn" : ""}">${m.descale ? "needed" : "not needed"}</span>
-              <span class="gap"></span>Water <span class="tag ${m.waterEmpty ? "warn" : ""}">${m.waterEmpty ? "empty" : "OK"}</span></b>
+            <b>Descale <span class="tag ${m.descale ? "warn" : m.descale === null ? "unknown" : ""}">${m.descale ? "needed" : m.descale === null ? "unknown" : "not needed"}</span>
+              ${m.waterEmpty ? `<span class="gap"></span>Water <span class="tag warn">empty</span>` : ""}</b>
             ${m.descale ? "<span>Start it on the oven: the descale symbol, then Start</span>"
               : m.waterEmpty ? "<span>Steam and sous vide need water</span>" : ""}
           </div>
@@ -1407,6 +1408,7 @@ const STYLE = `
   .item-btn { flex: none; padding: 0 14px; }
   .tag { margin-left: 4px; padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 600;
     background: rgba(var(--rgb-success-color, 67, 160, 71), .15); color: var(--success-color, #43a047); }
+  .tag.unknown { background: var(--track); color: var(--secondary-text-color); }
   .tag.warn { background: rgba(var(--rgb-error-color, 219, 68, 55), .15); color: var(--error-color, #db4437); }
   .toggle:disabled { opacity: .4; }
   .toggle ha-icon { --mdc-icon-size: 20px; }
