@@ -319,3 +319,11 @@ function programFromStagesForTest(card) {
   c2._update({ sousVide: true, temp: 56 }); c2._step("temp", 1, c2._model());
   check("sous vide setup: + adds 0.1 °C", c2._view().temp === 56.1);
 }
+
+// --- 0.14: the start says who started it ---
+{
+  const h = hass(); h.user = { id: "user-123", name: "U" };
+  const c = new Card(); store["anova-oven-card:setup"] = null; c.setConfig({}); c.hass = h;
+  c._start();
+  check("start carries the HA user", JSON.parse(h.calls.at(-1).data.payload).started_by === "user-123");
+}

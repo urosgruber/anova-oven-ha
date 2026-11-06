@@ -24,4 +24,10 @@ fi
 # must not stop the server.
 python3 /register_card.py || bashio::log.warning "Could not install the dashboard card"
 
+# Send the oven's events to phones. It runs beside the server; if it ends,
+# it starts again after 15 s.
+if bashio::config.true 'notify'; then
+  ( while true; do python3 /notify.py; sleep 15; done ) &
+fi
+
 exec /usr/bin/anova-oven-server

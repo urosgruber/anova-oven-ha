@@ -41,6 +41,26 @@ App stops it when the last timer ends, also for a cook started on the
 oven. Turn it on or off in the card's cog panel, or with the "Auto stop"
 switch of the Anova Oven device.
 
+## Notifications
+
+The App sends the oven's events to phones with the Home Assistant
+Companion app:
+
+| Event | Notification |
+|---|---|
+| Preheat done | "Preheat done. The oven is at temperature." |
+| A step starts | "Step 2 of 3 started: …" |
+| A step waits for you | "Step 2 waits for you. Tap Start step 2." |
+| The last timer ends | "Timer done. The oven stopped." (with Auto stop) |
+| The cook stops | "The cook stopped." |
+| The oven goes offline during a cook | "The oven went offline during a cook. It may still run." |
+
+A cook started from the dashboard card notifies the person who started
+it. A cook started on the oven notifies everyone. A person's phones are
+the phones in that person's "Track device" list (Settings → People).
+Turn notifications off with the `notify` option on the App's
+Configuration tab.
+
 If the oven hangs on a smart plug (for example a Shelly), the card can
 switch it and show its power draw. Add the plug's entities:
 
