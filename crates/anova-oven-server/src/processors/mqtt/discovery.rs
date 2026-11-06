@@ -151,6 +151,11 @@ fn config(topics: &Topics, e: &Entity) -> Value {
 
 /// A sensor reading `field` from the state JSON, unknown when it's null or
 /// absent.
+/// The Connected sensor's attributes: the oven's last reported mode,
+/// temperatures and recipe.
+const LAST_SEEN: &str = "{{ {'mode': value_json.get('mode'), 'temperature_c': value_json.get('temperature_c'), \
+'target_temperature_c': value_json.get('target_temperature_c'), 'recipe_title': value_json.get('recipe_title')} | tojson }}";
+
 fn reading(topics: &Topics, field: &str, extra: Value) -> Value {
     let mut v = json!({
         "state_topic": topics.state(),
@@ -336,7 +341,14 @@ fn entities(topics: &Topics, options: &[String]) -> Vec<Entity> {
             "connected",
             "Connected",
             Needs::Server,
-            on_off(topics, "value_json.get('connected')", Some("connectivity")),
+            {
+                // The last state the oven reported stays in the attributes
+                // while it is offline: the card shows if it was cooking.
+                let mut v = on_off(topics, "value_json.get('connected')", Some("connectivity"));
+                v["json_attributes_topic"] = topics.state().into();
+                v["json_attributes_template"] = LAST_SEEN.into();
+                v
+            },
         ),
         entity(
             "binary_sensor",

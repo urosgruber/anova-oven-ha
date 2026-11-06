@@ -35,6 +35,28 @@ type: custom:anova-oven-card
 title: Oven
 ```
 
+If the oven hangs on a smart plug (for example a Shelly), the card can
+switch it and show its power draw. Add the plug's entities:
+
+```yaml
+type: custom:anova-oven-card
+title: Oven
+power_switch: switch.oven_plug
+power_sensor: sensor.oven_plug_power
+power_idle_w: 20   # optional: the most an idle, cool oven draws
+```
+
+The card never cuts power to a hot oven, because the oven cools itself
+with its fan:
+
+- Turn on: when the plug is off. It replaces Bake, and needs one tap.
+- Turn off (in the cog panel): only when the oven is idle and below
+  50 °C. It needs two taps.
+- Restart (in the cog panel): only when the oven is offline and the plug
+  draws no more than `power_idle_w`. The plug goes off for 10 seconds,
+  then on. This often brings the oven back on the Wi-Fi. Keep the page
+  open for those 10 seconds: the card switches the plug back on.
+
 The card follows Home Assistant's tile card. Under the header (oven state,
 door, light) it always shows the same six rows, so it never changes size:
 
