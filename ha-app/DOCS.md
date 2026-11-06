@@ -46,14 +46,14 @@ power_sensor: sensor.oven_plug_power
 power_idle_w: 20   # optional: the most an idle, cool oven draws
 ```
 
-The card never cuts power to a hot oven, because the oven cools itself
-with its fan:
+The card never cuts power during a cook:
 
 - Turn on: when the plug is off. It replaces Bake, and needs one tap.
-- Turn off (in the cog panel): only when the oven is idle and below
-  50 °C. It needs two taps.
+- Turn off (in the cog panel): only when the oven is idle. It needs two
+  taps.
 - Restart (in the cog panel): only when the oven is offline and the plug
-  draws no more than `power_idle_w`. The plug goes off for 10 seconds,
+  draws no more than `power_idle_w`. A higher draw means a cook may
+  still run. The plug goes off for 10 seconds,
   then on. This often brings the oven back on the Wi-Fi. Keep the page
   open for those 10 seconds: the card switches the plug back on.
 
