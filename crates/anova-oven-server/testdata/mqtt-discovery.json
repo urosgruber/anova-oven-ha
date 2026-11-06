@@ -846,5 +846,35 @@
     "unique_id": "anova_oven_wet_bulb_temperature",
     "unit_of_measurement": "°C",
     "value_template": "{{ value_json.get('wet_bulb_temperature_c') }}"
+  },
+  "homeassistant/switch/anova_oven/auto_stop/config": {
+    "availability": [
+      {
+        "topic": "anova/oven/availability"
+      }
+    ],
+    "availability_mode": "all",
+    "command_topic": "anova/oven/cmd/auto_stop",
+    "default_entity_id": "switch.anova_oven_auto_stop",
+    "device": {
+      "identifiers": [
+        "anova_oven"
+      ],
+      "manufacturer": "Anova",
+      "model": "Precision Oven",
+      "name": "Anova Oven"
+    },
+    "has_entity_name": true,
+    "icon": "mdi:timer-stop-outline",
+    "name": "Auto stop",
+    "origin": {
+      "name": "anova-oven-server",
+      "sw_version": "x"
+    },
+    "payload_off": "OFF",
+    "payload_on": "ON",
+    "retain": true,
+    "state_topic": "anova/oven/auto_stop",
+    "unique_id": "anova_oven_auto_stop"
   }
 }

@@ -47,6 +47,10 @@ impl Topics {
     pub fn selected_attributes(&self) -> String {
         self.under("recipe/selected/attributes")
     }
+    /// The Auto stop switch's state, which the server owns.
+    pub fn auto_stop(&self) -> String {
+        self.under("auto_stop")
+    }
     /// The running cook's stages, as the Current recipe sensor's attributes.
     pub fn cook_attributes(&self) -> String {
         self.under("cook/attributes")
@@ -434,6 +438,23 @@ fn entities(topics: &Topics, options: &[String]) -> Vec<Entity> {
             "Next stage",
             Needs::WaitingStage,
             json!({ "command_topic": topics.command("next_stage") }),
+        ),
+        // Stop the oven when the last timer ends (`cook_done`), for every
+        // cook, also one started on the oven. Home Assistant publishes the
+        // command retained, so the server reads it back after a restart.
+        entity(
+            "switch",
+            "auto_stop",
+            "Auto stop",
+            Needs::Server,
+            json!({
+                "command_topic": topics.command("auto_stop"),
+                "state_topic": topics.auto_stop(),
+                "payload_on": "ON",
+                "payload_off": "OFF",
+                "retain": true,
+                "icon": "mdi:timer-stop-outline",
+            }),
         ),
         local(
             "light",

@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.12.4";
+const CARD_VERSION = "0.13.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -49,7 +49,7 @@ const WATCHED = [
   "binary_sensor.water_tank_empty", "binary_sensor.descale_required", "light.lamp", "event.cook",
   "sensor.mode", "sensor.temperature", "sensor.target_temperature", "sensor.probe_temperature", "sensor.steam",
   "sensor.stage_ends_at", "sensor.stage", "sensor.stage_description", "sensor.current_recipe", "number.set_timer",
-  "sensor.recipes",
+  "sensor.recipes", "switch.auto_stop", "sensor.wet_bulb_temperature",
 ];
 
 // The oven runs any one or two of its three elements.
@@ -318,9 +318,11 @@ class AnovaOvenCard extends HTMLElement {
     }, LAMP_CONFIRM_MS + 100);
   }
 
-  _setTarget(value) {
-    this._call("number", "set_value", { entity_id: this._id("number", "set_temperature"),
-      value: clamp(Math.round(value), 25, 250) });
+  // Sous vide takes 0.1 °C, a dry cook whole degrees. Straight to the App's
+  // command topic: the Set temperature number only takes whole degrees.
+  _setTarget(value, wet) {
+    const t = wet ? clamp(Math.round(value * 10) / 10, ...LIMITS.wet) : clamp(Math.round(value), ...LIMITS.dry);
+    this._call("mqtt", "publish", { topic: `${this._config.mqtt_prefix}/cmd/temperature`, payload: String(t) });
   }
 
   _update(change) {
@@ -340,7 +342,7 @@ class AnovaOvenCard extends HTMLElement {
     const s = this._view();
     if (m.cooking) {
       // On a running cook, each step is one command to the oven.
-      if (what === "temp" && m.target !== null) this._setTarget(m.target + dir);
+      if (what === "temp" && m.target !== null) this._setTarget(m.target + dir * (m.wet ? 0.1 : 1), m.wet);
       // The oven restarts its countdown from the value it gets, so add to
       // or take from the time left, not the stage's total.
       const left = remaining(m);
@@ -350,7 +352,7 @@ class AnovaOvenCard extends HTMLElement {
       }
       return;
     }
-    if (what === "temp") this._update({ temp: s.temp + dir * (s.sousVide ? 0.5 : 1) });
+    if (what === "temp") this._update({ temp: s.temp + dir * (s.sousVide ? 0.1 : 1) });
     if (what === "end" && s.end === "timer") this._update({ timer: s.timer + dir * timerStep(s.timer, dir) });
     if (what === "end" && s.end === "probe") this._update({ probe: s.probe + dir });
     if (what === "steam") this._update({ steam: s.steam + dir * 10 });
@@ -398,6 +400,12 @@ class AnovaOvenCard extends HTMLElement {
       done: cooking && lastEvent === "cook_done",
       temp: this._number("sensor", "temperature"),
       target: this._number("sensor", "target_temperature"),
+      wetTemp: this._number("sensor", "wet_bulb_temperature"),
+      // When this browser's clock saw the cook start (HA's last change of
+      // the Cooking sensor). An HA restart mid-cook resets it.
+      cookStart: cooking ? Date.parse((this._state("binary_sensor", "cooking") || {}).last_changed) || null : null,
+      // null when the App has no Auto stop switch (older App).
+      autoStop: this._value("switch", "auto_stop") === null ? null : this._on("switch", "auto_stop"),
       probe: this._number("sensor", "probe_temperature"),
       steam: this._number("sensor", "steam"),
       endsAt: this._stableEnd(endsAt ? Date.parse(endsAt) : null),
@@ -416,6 +424,19 @@ class AnovaOvenCard extends HTMLElement {
     };
   }
 
+  // The model, with a sous vide cook's wet-bulb temperature and target in
+  // place of the dry ones: the dry setpoint is not what the oven holds.
+  _liveModel() {
+    const m = this._model();
+    const st = m.cooking ? runningStage(m) : null;
+    if (st && st.temperature_bulbs_mode === "wet") {
+      m.wet = true;
+      m.temp = m.wetTemp;
+      m.target = st.temperature_c;
+    }
+    return m;
+  }
+
   // --- Rendering ----------------------------------------------------------
 
   _render() {
@@ -424,7 +445,7 @@ class AnovaOvenCard extends HTMLElement {
       this.shadowRoot.innerHTML = `<style>${STYLE}</style><ha-card><div class="secondary">Loading…</div></ha-card>`;
       return;
     }
-    const m = this._model();
+    const m = this._liveModel();
     const s = this._view();
     const live = m.cooking;
     const off = !m.connected;
@@ -494,7 +515,7 @@ class AnovaOvenCard extends HTMLElement {
               html: `<ha-icon icon="${e.icon}"></ha-icon>`, disabled: e.key === "probe" && m.probe === null && s.end !== "probe" })),
               live ? liveEnd(m) : s.end, off || live)}
             ${stepper("end", endValue(m, s), endDisabled(m, s, off), null,
-              { buttons: endValue(m, s) !== NO_END && !m.done, editable: !endDisabled(m, s, off), editTitle: "Tap to type: minutes (90), 1h30 or 1:30" })}
+              { buttons: (live ? liveEnd(m) !== "none" : s.end !== "none") && !m.done, editable: !endDisabled(m, s, off), editTitle: "Tap to type: minutes (90), 1h30 or 1:30" })}
           </div>
 
           <div class="pair go">
@@ -611,6 +632,10 @@ class AnovaOvenCard extends HTMLElement {
       <div class="panel">
         <div class="panel-head">
           <span>Maintenance</span>
+          <span class="head-tags" ${m.descale ? `title="Fill the tank with descaler and water, press the descale symbol on the oven, then Start on the handle."` : ""}>
+            Descale <span class="tag ${m.descale ? "warn" : m.descale === null ? "unknown" : ""}">${m.descale ? "needed" : m.descale === null ? "unknown" : "not needed"}</span>
+            ${m.waterEmpty ? `Water <span class="tag warn">empty</span>` : ""}
+          </span>
           <button class="icon-state" id="tools-close" title="Close"><ha-icon icon="mdi:close"></ha-icon></button>
         </div>
         <div class="item" title="Runs by itself: rear 176 °C for 15 min, a 15-minute cool-down with the vent open, top and bottom 176 °C for 15 min, then a cool-down until you tap Stop.">
@@ -621,14 +646,15 @@ class AnovaOvenCard extends HTMLElement {
           <button class="feature action start item-btn" id="prep" ${busy ? "disabled" : ""}><ha-icon icon="mdi:play"></ha-icon>Start</button>
         </div>
         ${m.hasPlug ? this._powerItem(m) : ""}
-        <div class="item" ${m.descale ? `title="Fill the tank with descaler and water, press the descale symbol on the oven, then Start on the handle."` : ""}>
+        ${m.autoStop === null ? "" : `
+        <div class="item">
           <div class="item-text">
-            <b>Descale <span class="tag ${m.descale ? "warn" : m.descale === null ? "unknown" : ""}">${m.descale ? "needed" : m.descale === null ? "unknown" : "not needed"}</span>
-              ${m.waterEmpty ? `<span class="gap"></span>Water <span class="tag warn">empty</span>` : ""}</b>
-            ${m.descale ? "<span>Start it on the oven: the descale symbol, then Start</span>"
-              : m.waterEmpty ? "<span>Steam and sous vide need water</span>" : ""}
+            <b>Auto stop <span class="tag ${m.autoStop ? "" : "unknown"}">${m.autoStop ? "on" : "off"}</span></b>
+            <span>${m.autoStop ? "Stops the oven when the last timer ends" : "The oven holds the temperature after the last timer"}</span>
           </div>
-        </div>
+          <button class="feature toggle labeled item-btn ${m.autoStop ? "on" : ""}" id="auto-stop" aria-pressed="${m.autoStop}">
+            <ha-icon icon="${m.autoStop ? "mdi:checkbox-marked-circle-outline" : "mdi:checkbox-blank-circle-outline"}"></ha-icon><span>${m.autoStop ? "On" : "Off"}</span></button>
+        </div>`}
       </div>`;
   }
 
@@ -731,6 +757,8 @@ class AnovaOvenCard extends HTMLElement {
     });
     if ($("tools-close")) $("tools-close").onclick = () => { this._panel = null; this._render(); };
     if ($("prep")) $("prep").onclick = () => this._startPrep();
+    if ($("auto-stop")) $("auto-stop").onclick = () => this._call("switch", m.autoStop ? "turn_off" : "turn_on",
+      { entity_id: this._id("switch", "auto_stop") });
     for (const action of ["on", "off", "restart"]) {
       if ($(`power-${action}`)) $(`power-${action}`).onclick = () => this._power(action);
     }
@@ -742,7 +770,7 @@ class AnovaOvenCard extends HTMLElement {
     // running cook, where each step is a command to the oven.
     root.querySelectorAll("[data-step]").forEach((b) => {
       const [what, dir] = b.dataset.step.split(":");
-      const step = () => this._step(what, Number(dir), this._model());
+      const step = () => this._step(what, Number(dir), this._liveModel());
       b.onpointerdown = (ev) => {
         ev.preventDefault();
         if (b.disabled) return;
@@ -757,7 +785,7 @@ class AnovaOvenCard extends HTMLElement {
     // Sliders: drag for big changes; the value commits on release.
     this._bindDrag("temp", { ...temp, step: m.cooking ? 1 : this._view().sousVide ? 0.5 : 1,
       label: (v) => (m.cooking ? `${m.temp === null ? "—" : Math.round(m.temp)} → ${Math.round(v)} °C` : fmtTemp(v, " °C")),
-      commit: (v) => (m.cooking ? this._setTarget(v) : this._update({ temp: v })) });
+      commit: (v) => (m.cooking ? this._setTarget(v, m.wet) : this._update({ temp: v })) });
     this._bindDrag("steam", { lo: 0, hi: 100, step: 10, disabled: m.cooking || !m.connected || this._view().sousVide,
       label: (v) => steamLabel(m, { ...this._view(), steam: v }),
       commit: (v) => this._update({ steam: v }) });
@@ -811,7 +839,7 @@ class AnovaOvenCard extends HTMLElement {
 
   _renderValues() {
     const s = this._view();
-    const m = this._model();
+    const m = this._liveModel();
     const set = (id, text) => { const el = this.shadowRoot.getElementById(id); if (el) el.textContent = text; };
     const [lo, hi] = LIMITS[s.sousVide ? "wet" : "dry"];
     set("temp-value", fmtTemp(s.temp, " °C"));
@@ -825,7 +853,7 @@ class AnovaOvenCard extends HTMLElement {
 
   _renderLive() {
     if (!this.shadowRoot || !this._hass || this._holding) return;
-    const m = this._model();
+    const m = this._liveModel();
     const $ = (id) => this.shadowRoot.getElementById(id);
     if (!warningText(m) && $("secondary")) $("secondary").innerHTML = statusLine(m, "");
     if (m.cooking) {
@@ -923,7 +951,7 @@ function endValue(m, s) {
     const left = remaining(m);
     if (left !== null) return clock(left);
     if (m.probe !== null) return `Probe ${Math.round(m.probe)} °C`;
-    return NO_END;
+    return m.cookStart ? `${clock(Math.max(0, Math.round((Date.now() - m.cookStart) / 1000)))} in` : NO_END;
   }
   if (s.end === "timer") return clock(s.timer * 60);
   if (s.end === "probe") return m.probe === null ? "Plug in the probe" : `Probe to ${s.probe} °C`;
@@ -1035,7 +1063,7 @@ function stageBase(st) {
 
 function normalizeStep(st) {
   const [lo, hi] = LIMITS[st.sousVide ? "wet" : "dry"];
-  st.temp = clamp(st.sousVide ? Math.round(st.temp * 2) / 2 : Math.round(st.temp), lo, hi);
+  st.temp = clamp(st.sousVide ? Math.round(st.temp * 10) / 10 : Math.round(st.temp), lo, hi);
   st.timer = clamp(st.timer, 1, 24 * 60);
   st.probe = clamp(Math.round(st.probe), ...LIMITS.probe);
   st.steam = clamp(st.steam, 0, 100);
@@ -1200,13 +1228,16 @@ function barLabel(m) {
   else if (m.nextReady) left = `Step ${cur + 1} waits for you`;
   else left = [step, desc].filter(Boolean).join(" · ") || m.phase;
   const rem = remaining(m);
-  const right = m.done || m.nextReady ? "" : rem !== null ? `Ends ${hhmm(Date.now() + rem * 1000)}` : "";
+  const end = m.autoStop && stagePos(m).cur === stagePos(m).total ? "Stops" : "Ends";
+  const right = m.done || m.nextReady ? "" : rem !== null ? `${end} ${hhmm(Date.now() + rem * 1000)}`
+    : m.cookStart ? `Since ${hhmm(m.cookStart)}` : "";
   return `<span>${esc(left)}</span><span>${esc(right)}</span>`;
 }
 
 function liveTempLabel(m) {
-  const now = m.temp === null ? "—" : Math.round(m.temp);
-  return m.target === null ? `${now} °C` : `${now} → ${Math.round(m.target)} °C`;
+  const r = (v) => (m.wet ? fmtTemp(Math.round(v * 10) / 10, "") : Math.round(v));
+  const now = m.temp === null ? "—" : r(m.temp);
+  return m.target === null ? `${now} °C` : `${now} → ${r(m.target)} °C`;
 }
 
 function clock(secs) {
@@ -1447,6 +1478,8 @@ const STYLE = `
   .item-text > span { font-size: 12px; line-height: 16px; color: var(--secondary-text-color);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .item-text b .gap { display: inline-block; width: 12px; }
+  .head-tags { flex: 1; text-align: right; padding-right: 8px; font-size: 12px; font-weight: 500;
+    color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .item-btn { flex: none; padding: 0 14px; }
   .tag { margin-left: 4px; padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 600;
     background: rgba(var(--rgb-success-color, 67, 160, 71), .15); color: var(--success-color, #43a047); }

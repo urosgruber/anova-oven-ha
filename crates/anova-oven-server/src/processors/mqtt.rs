@@ -119,6 +119,7 @@ pub async fn run(config: MqttConfig, mut sources: Sources) {
         options: Vec::new(),
         selected: None,
         last_state: None,
+        auto_stop: true,
         last_cook: None,
         last_recipes: None,
         last_snapshot: None,
@@ -202,6 +203,9 @@ struct Processor {
     /// survives an HA restart and a stale select can't start the wrong one.
     selected: Option<String>,
     last_state: Option<String>,
+    /// Stop the oven at `cook_done`. On until the retained command says
+    /// otherwise.
+    auto_stop: bool,
     /// The running cook's stages payload last published.
     last_cook: Option<String>,
     /// The recipes-with-stages payload last published.
@@ -241,6 +245,7 @@ impl Processor {
         {
             warn!(error = %e, "[mqtt] subscribe failed");
         }
+        self.publish_auto_stop().await;
         self.last_recipes = None;
         self.publish_recipes().await;
         self.last_state = None;
@@ -437,8 +442,10 @@ impl Processor {
             self.next_stage_ready = Some(ready);
         }
 
+        let mut done = false;
         if let Some(prev) = &self.last_snapshot {
             for milestone in milestones::milestones(prev, &snapshot) {
+                done |= milestone == Milestone::CookDone;
                 let source = if milestone.describes_previous() {
                     prev
                 } else {
@@ -449,6 +456,37 @@ impl Processor {
             }
         }
         self.last_snapshot = Some(snapshot);
+        if done && self.auto_stop {
+            self.stop_at_cook_done(sources).await;
+        }
+    }
+
+    async fn publish_auto_stop(&self) {
+        let state = if self.auto_stop { "ON" } else { "OFF" };
+        self.publish(self.topics.auto_stop(), true, state).await;
+    }
+
+    /// The oven holds the temperature after its last timer; neither it nor
+    /// Anova's cloud stops the cook. With Auto stop on, the server does.
+    async fn stop_at_cook_done(&self, sources: &Sources) {
+        info!("[mqtt] cook done: auto stop");
+        let (reply_tx, reply_rx) = oneshot::channel();
+        if sources
+            .sm_cmd_tx
+            .send(StateMachineCommand::StopCook { reply: reply_tx })
+            .await
+            .is_err()
+        {
+            return;
+        }
+        match reply_rx.await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => self.command_failed("auto_stop", &e.to_string()).await,
+            Err(_) => {
+                self.command_failed("auto_stop", "state machine dropped the reply")
+                    .await
+            }
+        }
     }
 
     async fn event(&self, milestone: Milestone, payload: serde_json::Value) {
@@ -525,6 +563,18 @@ impl Processor {
                 }
             }
             "stop" => StateMachineCommand::StopCook { reply: reply_tx },
+            "auto_stop" => {
+                match text.as_str() {
+                    "ON" => self.auto_stop = true,
+                    "OFF" => self.auto_stop = false,
+                    _ => {
+                        self.command_failed("auto_stop", "wants ON or OFF").await;
+                        return;
+                    }
+                }
+                self.publish_auto_stop().await;
+                return;
+            }
             "save_recipe" => {
                 self.save_recipe(&text, sources).await;
                 return;
