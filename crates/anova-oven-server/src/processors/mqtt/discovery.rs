@@ -158,7 +158,8 @@ fn config(topics: &Topics, e: &Entity) -> Value {
 /// The Connected sensor's attributes: the oven's last reported mode,
 /// temperatures and recipe.
 const LAST_SEEN: &str = "{{ {'mode': value_json.get('mode'), 'temperature_c': value_json.get('temperature_c'), \
-'target_temperature_c': value_json.get('target_temperature_c'), 'recipe_title': value_json.get('recipe_title')} | tojson }}";
+'target_temperature_c': value_json.get('target_temperature_c'), 'recipe_title': value_json.get('recipe_title'), \
+'stage_started_at': value_json.get('stage_started_at')} | tojson }}";
 
 fn reading(topics: &Topics, field: &str, extra: Value) -> Value {
     let mut v = json!({
