@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.14.0";
+const CARD_VERSION = "0.15.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -231,7 +231,7 @@ class AnovaOvenCard extends HTMLElement {
     this._setProgram({ ...p, steps, sel: Math.min(p.sel, steps.length - 1) });
   }
 
-  // Tap the end value to type it: the timer in minutes, 1h30 or 1:30, or
+  // Tap the end value to type it: the timer in minutes, 3m30s, 1h30 or 1:30, or
   // the probe target in °C. Enter or leaving the field commits; Escape
   // cancels. On a running cook it sets the running timer.
   _editEnd(m) {
@@ -243,8 +243,8 @@ class AnovaOvenCard extends HTMLElement {
     input.className = "value-input";
     input.type = "text";
     input.inputMode = kind === "timer" ? "text" : "numeric";
-    input.value = kind === "timer" ? String(m.cooking ? Math.round(m.timerTotal / 60) : s.timer) : String(s.probe);
-    input.placeholder = kind === "timer" ? "min, 1h30, 1:30" : "°C";
+    input.value = kind === "timer" ? fmtMinutes(m.cooking ? m.timerTotal / 60 : s.timer) : String(s.probe);
+    input.placeholder = kind === "timer" ? "min, 3m30s, 1h30" : "°C";
     input.setAttribute("aria-label", kind === "timer" ? "Timer" : "Probe target");
     btn.replaceWith(input);
     this._typing = true;
@@ -256,8 +256,10 @@ class AnovaOvenCard extends HTMLElement {
       if (commit) {
         if (kind === "timer") {
           const min = parseMinutes(input.value);
+          // The command topic takes seconds, so a typed 3m30s stays exact.
           if (min !== null && m.cooking) {
-            this._call("number", "set_value", { entity_id: this._id("number", "set_timer"), value: clamp(min, 1, 1440) });
+            this._call("mqtt", "publish", { topic: `${this._config.mqtt_prefix}/cmd/timer`,
+              payload: String(Math.round(clamp(min, 1, 1440) * 60)) });
           } else if (min !== null) this._update({ timer: min });
         } else {
           const t = Number(input.value.replace(",", "."));
@@ -355,7 +357,11 @@ class AnovaOvenCard extends HTMLElement {
       return;
     }
     if (what === "temp") this._update({ temp: s.temp + dir * (s.sousVide ? 0.1 : 1) });
-    if (what === "end" && s.end === "timer") this._update({ timer: s.timer + dir * timerStep(s.timer, dir) });
+    // From 3m30s, + goes to 4 and - to 3; then in whole steps.
+    if (what === "end" && s.end === "timer") {
+      const t = s.timer + dir * timerStep(s.timer, dir);
+      this._update({ timer: dir > 0 ? Math.floor(t) : Math.ceil(t) });
+    }
     if (what === "end" && s.end === "probe") this._update({ probe: s.probe + dir });
     if (what === "steam") this._update({ steam: s.steam + dir * 10 });
   }
@@ -517,7 +523,7 @@ class AnovaOvenCard extends HTMLElement {
               html: `<ha-icon icon="${e.icon}"></ha-icon>`, disabled: e.key === "probe" && m.probe === null && s.end !== "probe" })),
               live ? liveEnd(m) : s.end, off || live)}
             ${stepper("end", endValue(m, s), endDisabled(m, s, off), null,
-              { buttons: (live ? liveEnd(m) !== "none" : s.end !== "none") && !m.done, editable: !endDisabled(m, s, off), editTitle: "Tap to type: minutes (90), 1h30 or 1:30" })}
+              { buttons: (live ? liveEnd(m) !== "none" : s.end !== "none") && !m.done, editable: !endDisabled(m, s, off), editTitle: "Tap to type: minutes (90), 3m30s, 1h30 or 1:30" })}
           </div>
 
           <div class="pair go">
@@ -954,7 +960,7 @@ function endValue(m, s) {
     if (m.probe !== null) return `Probe ${Math.round(m.probe)} °C`;
     return m.cookStart ? `${clock(Math.max(0, Math.round((Date.now() - m.cookStart) / 1000)))} in` : NO_END;
   }
-  if (s.end === "timer") return clock(s.timer * 60);
+  if (s.end === "timer") return clock(Math.round(s.timer * 60));
   if (s.end === "probe") return m.probe === null ? "Plug in the probe" : `Probe to ${s.probe} °C`;
   return NO_END;
 }
@@ -995,7 +1001,7 @@ function programStages(p) {
     const base = stageBase(st);
     if (i === 0 && p.preheat) stages.push({ ...base, kind: "preheat" });
     const cook = { ...base, kind: "cook", user_action_required: i > 0 && st.waits };
-    if (st.end === "timer") Object.assign(cook, { timer_added: true, duration_secs: st.timer * 60 });
+    if (st.end === "timer") Object.assign(cook, { timer_added: true, duration_secs: Math.round(st.timer * 60) });
     if (st.end === "probe") Object.assign(cook, { probe_added: true, probe_target_c: st.probe });
     stages.push(cook);
   });
@@ -1019,7 +1025,7 @@ function programFromStages(stages) {
       temp: Number(sg.temperature_c) || DEFAULT_STEP.temp,
       steam: Math.round((Number(sg.steam_pct) || 0) / 10) * 10,
       end: sg.timer_added && sg.duration_secs ? "timer" : sg.probe_added && sg.probe_target_c ? "probe" : "none",
-      timer: sg.duration_secs ? Math.max(1, Math.round(sg.duration_secs / 60)) : DEFAULT_STEP.timer,
+      timer: sg.duration_secs ? Math.max(1, Math.round(sg.duration_secs) / 60) : DEFAULT_STEP.timer,
       probe: sg.probe_target_c || DEFAULT_STEP.probe,
       waits: steps.length > 0 && !!sg.user_action_required,
     };
@@ -1038,15 +1044,27 @@ function recipeSummary(r) {
   return `${temp}${sv}${n}`;
 }
 
-// Minutes from "90", "1h30", "1 h 30 m", "45m", "2h" or "1:30" (h:mm).
+// Minutes from "90", "3.5", "1h30", "1 h 30 m", "45m", "2h", "1:30" (h:mm),
+// "1:30:15" (h:mm:ss), "3m30s", "3m30" or "90s". The result can have
+// seconds: "3m30s" is 3.5. A number after "h" is minutes; after "m", seconds.
 function parseMinutes(text) {
-  const t = String(text).trim().toLowerCase().replace(/\s+/g, "");
+  const t = String(text).trim().toLowerCase().replace(/\s+/g, "").replace(",", ".");
   if (!t) return null;
+  const n = (v) => Number(v || 0);
+  const secs = (h, m, s) => Math.round(n(h) * 3600 + n(m) * 60 + n(s)) / 60;
   let m;
-  if ((m = /^(\d+)$/.exec(t))) return Number(m[1]);
-  if ((m = /^(\d+):(\d{1,2})(?::\d{1,2})?$/.exec(t))) return Number(m[1]) * 60 + Number(m[2]);
-  if ((m = /^(?:(\d+)h)?(?:(\d+)(?:m|min)?)?$/.exec(t)) && (m[1] || m[2])) return Number(m[1] || 0) * 60 + Number(m[2] || 0);
+  if ((m = /^(\d+(?:\.\d+)?)$/.exec(t))) return Math.round(Number(m[1]) * 60) / 60;
+  if ((m = /^(\d+):(\d{1,2})(?::(\d{1,2}))?$/.exec(t))) return secs(m[1], m[2], m[3]);
+  if ((m = /^(\d+)(?:s|sec)$/.exec(t))) return secs(0, 0, m[1]);
+  if ((m = /^(?:(\d+)h)?(\d+)(?:m|min)(?:(\d+)(?:s|sec)?)?$/.exec(t))) return secs(m[1], m[2], m[3]);
+  if ((m = /^(\d+)h(?:(\d+)(?:m|min)?)?$/.exec(t))) return secs(m[1], m[2], 0);
   return null;
+}
+
+// Minutes as the timer field shows them: "90", or "3m30s" with seconds.
+function fmtMinutes(min) {
+  const total = Math.round(min * 60);
+  return total % 60 ? `${Math.floor(total / 60)}m${total % 60}s` : String(total / 60);
 }
 
 function stageBase(st) {
@@ -1065,7 +1083,7 @@ function stageBase(st) {
 function normalizeStep(st) {
   const [lo, hi] = LIMITS[st.sousVide ? "wet" : "dry"];
   st.temp = clamp(st.sousVide ? Math.round(st.temp * 10) / 10 : Math.round(st.temp), lo, hi);
-  st.timer = clamp(st.timer, 1, 24 * 60);
+  st.timer = clamp(Math.round(st.timer * 60) / 60, 1, 24 * 60);
   st.probe = clamp(Math.round(st.probe), ...LIMITS.probe);
   st.steam = clamp(st.steam, 0, 100);
 }

@@ -326,6 +326,11 @@ are always sent as Celsius.
 - `ANOVA_MQTT_USERNAME`, `ANOVA_MQTT_PASSWORD`
 - `ANOVA_MQTT_TOPIC_PREFIX` — default `anova/oven`
 - `ANOVA_MQTT_DISCOVERY_PREFIX` — default `homeassistant`
+- `ANOVA_MQTT_CLIENT_ID` — default `anova-oven-server`. Two servers on one
+  broker need two IDs, or the broker drops them in turn.
+- `ANOVA_SAFETY_LIMIT_HOURS` — default `4`, `0` is off. Stops a dry cook
+  with no timer or probe (or one that holds after its last timer) after
+  this long. Sous vide has no limit.
 
 **Running:**
 ```sh

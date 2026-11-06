@@ -12,6 +12,11 @@
 //! `stageTransitionPendingUserAction`. In cloud mode it's inferred, so
 //! `stage_waiting` can be late or missed, and since cloud mode never sets
 //! `cook_done`, every end of a cook there is `cook_stopped`.
+//!
+//! `temp_reached` needs a memory: the oven reached the stage's target once,
+//! so a dip (the door opened) does not announce it again. [`Snapshot::carry`]
+//! copies that flag from the previous snapshot while the stage stays the
+//! same.
 
 use anova_oven_api::{CurrentCook, OvenStatus, Stage};
 
@@ -34,6 +39,20 @@ pub struct Snapshot {
     pub cook_done: bool,
     /// The oven's display unit, for the stage summaries.
     pub unit: String,
+    /// The reading the oven cooks to: the wet bulb in sous vide, else the
+    /// dry bulb.
+    pub temperature_c: Option<f32>,
+    /// The running stage's target for that reading.
+    pub target_c: Option<f32>,
+    /// Sous vide (wet bulb).
+    pub wet: bool,
+    /// The running stage uses water: sous vide or steam.
+    pub uses_water: bool,
+    pub water_tank_empty: bool,
+    /// The running stage has a timer or a probe target, so it ends.
+    pub has_end: bool,
+    /// The oven has been at the target in this stage. Set by [`Self::carry`].
+    pub reached: bool,
 }
 
 impl Snapshot {
@@ -53,7 +72,54 @@ impl Snapshot {
             next_stage_ready: progress.is_some_and(|p| p.next_stage_ready),
             cook_done: status.is_some_and(|s| s.cook_done),
             unit: status.map_or_else(|| "C".into(), |s| s.temperature_unit.clone()),
+            temperature_c: status.map(OvenStatus::current_temperature_c),
+            target_c: status.and_then(|s| {
+                if s.temperature_bulbs_mode == "wet" {
+                    s.wet_target_temperature_c
+                } else {
+                    s.target_temperature_c
+                }
+            }),
+            wet: status.is_some_and(|s| s.temperature_bulbs_mode == "wet"),
+            uses_water: status.is_some_and(|s| {
+                s.temperature_bulbs_mode == "wet" || s.steam_target_pct.is_some_and(|p| p > 0.0)
+            }),
+            water_tank_empty: status.is_some_and(|s| s.water_tank_empty),
+            has_end: status.is_some_and(|s| {
+                s.timer_total_secs > 0 || s.probe_target_temperature_c.is_some()
+            }),
+            reached: false,
         }
+    }
+
+    /// Take over `reached` from the previous snapshot while the cook and
+    /// its stage stay the same. Call it before [`milestones`].
+    pub fn carry(&mut self, prev: &Snapshot) {
+        self.reached = self.near_target() || (self.same_stage(prev) && prev.reached);
+    }
+
+    /// Within 2 °C of the target (0.5 °C in sous vide), from above or below.
+    fn near_target(&self) -> bool {
+        let tolerance = if self.wet { 0.5 } else { 2.0 };
+        self.cooking
+            && matches!((self.temperature_c, self.target_c),
+                (Some(t), Some(target)) if (t - target).abs() <= tolerance)
+    }
+
+    /// Both snapshots show the same cook on the same stage. A cook ID that
+    /// arrives late does not make a new cook.
+    fn same_stage(&self, prev: &Snapshot) -> bool {
+        prev.cooking
+            && self.cooking
+            && prev.stage_index == self.stage_index
+            && !matches!((&prev.cook_key, &self.cook_key), (Some(a), Some(b)) if a != b)
+    }
+
+    /// The cook runs dry and nothing ends it: no timer and no probe, or the
+    /// last timer ended and the oven holds the temperature. The safety
+    /// limit stops such a cook. Sous vide is never limited: it runs 24 h+.
+    pub fn unbounded(&self) -> bool {
+        self.cooking && !self.wet && (self.cook_done || !self.has_end)
     }
 
     fn stage(&self, index: Option<usize>) -> Option<&Stage> {
@@ -73,6 +139,8 @@ impl Snapshot {
             "next_stage": self
                 .stage(self.stage_index.map(|i| i + 1))
                 .map(|s| recipes::summary(s, &self.unit)),
+            "target_c": self.target_c,
+            "wet": self.wet,
         })
     }
 }
@@ -86,6 +154,8 @@ pub enum Milestone {
     CookDone,
     CookStopped,
     OvenLost,
+    TempReached,
+    WaterEmpty,
 }
 
 impl Milestone {
@@ -98,6 +168,8 @@ impl Milestone {
             Milestone::CookDone => "cook_done",
             Milestone::CookStopped => "cook_stopped",
             Milestone::OvenLost => "oven_lost",
+            Milestone::TempReached => "temp_reached",
+            Milestone::WaterEmpty => "water_empty",
         }
     }
 
@@ -108,7 +180,7 @@ impl Milestone {
 }
 
 /// Every `event_type` the event entity announces.
-pub const EVENT_TYPES: [&str; 8] = [
+pub const EVENT_TYPES: [&str; 10] = [
     "cook_started",
     "preheat_done",
     "stage_started",
@@ -117,6 +189,8 @@ pub const EVENT_TYPES: [&str; 8] = [
     "cook_stopped",
     "command_failed",
     "oven_lost",
+    "temp_reached",
+    "water_empty",
 ];
 
 /// The milestones between two snapshots.
@@ -129,6 +203,13 @@ pub fn milestones(prev: &Snapshot, next: &Snapshot) -> Vec<Milestone> {
     // While the oven is away its last state stands; nothing else to say.
     if !next.connected {
         return out;
+    }
+
+    // The tank runs empty during a stage that needs water, or a cook starts
+    // (or reaches such a stage) with the tank empty.
+    let dry_tank = |s: &Snapshot| s.cooking && s.uses_water && s.water_tank_empty;
+    if dry_tank(next) && !dry_tank(prev) {
+        out.push(Milestone::WaterEmpty);
     }
 
     match (prev.cooking, next.cooking) {
@@ -159,6 +240,13 @@ pub fn milestones(prev: &Snapshot, next: &Snapshot) -> Vec<Milestone> {
                         Milestone::StageStarted
                     });
                 }
+            }
+            // A preheat stage says `preheat_done` instead.
+            let preheat = next
+                .stage(next.stage_index)
+                .is_some_and(|s| s.kind == "preheat");
+            if next.same_stage(prev) && !prev.reached && next.reached && !preheat {
+                out.push(Milestone::TempReached);
             }
             if !prev.next_stage_ready && next.next_stage_ready {
                 out.push(Milestone::StageWaiting);
@@ -285,6 +373,85 @@ mod tests {
             ..idle()
         };
         assert!(sequence(&[idle(), idle_lost]).is_empty());
+    }
+
+    /// `carry` each snapshot from the one before, as the processor does.
+    fn carried(snapshots: &[Snapshot]) -> Vec<&'static str> {
+        let mut out: Vec<Snapshot> = Vec::new();
+        for s in snapshots {
+            let mut s = s.clone();
+            if let Some(prev) = out.last() {
+                s.carry(prev);
+            }
+            out.push(s);
+        }
+        sequence(&out)
+    }
+
+    fn heating(stage_index: usize, temp: f32) -> Snapshot {
+        Snapshot {
+            temperature_c: Some(temp),
+            target_c: Some(200.0),
+            has_end: false,
+            ..cooking(stage_index)
+        }
+    }
+
+    #[test]
+    fn temp_reached_once_per_stage() {
+        assert_eq!(
+            carried(&[
+                heating(1, 20.0),
+                heating(1, 150.0),
+                heating(1, 198.5), // within 2 °C
+                heating(1, 201.0),
+                heating(1, 180.0), // the door opened: no new event
+                heating(1, 199.0),
+            ]),
+            ["temp_reached"]
+        );
+    }
+
+    #[test]
+    fn temp_reached_not_for_a_preheat_stage_nor_a_hot_start() {
+        // Stage 0 is a preheat: preheat_done says it.
+        assert!(carried(&[heating(0, 20.0), heating(0, 199.0)]).is_empty());
+        // The next stage starts at its target already: nothing to announce.
+        assert_eq!(
+            carried(&[heating(1, 20.0), heating(1, 200.0), heating(2, 200.0)]),
+            ["temp_reached", "stage_started"]
+        );
+        // Sous vide uses 0.5 °C.
+        let wet = |t| Snapshot { wet: true, target_c: Some(56.0), ..heating(1, t) };
+        assert!(carried(&[wet(50.0), wet(55.0)]).is_empty());
+        assert_eq!(carried(&[wet(50.0), wet(55.6)]), ["temp_reached"]);
+    }
+
+    #[test]
+    fn water_empty_only_when_the_stage_needs_water() {
+        let steam = |empty| Snapshot { uses_water: true, water_tank_empty: empty, ..cooking(1) };
+        let dry = Snapshot { water_tank_empty: true, ..cooking(1) };
+        assert_eq!(
+            sequence(&[steam(false), steam(true), steam(true), steam(false), steam(true)]),
+            ["water_empty", "water_empty"]
+        );
+        assert!(sequence(&[cooking(1), dry.clone()]).is_empty());
+        // A cook that starts with the tank empty.
+        assert_eq!(sequence(&[idle(), steam(true)]), ["water_empty", "cook_started"]);
+        // A dry stage, then a steam stage with the tank empty.
+        assert_eq!(
+            sequence(&[dry, Snapshot { stage_index: Some(2), ..steam(true) }]),
+            ["water_empty", "stage_started"]
+        );
+    }
+
+    #[test]
+    fn unbounded_is_a_dry_cook_with_no_end() {
+        assert!(heating(1, 200.0).unbounded());
+        assert!(!Snapshot { has_end: true, ..heating(1, 200.0) }.unbounded());
+        assert!(Snapshot { has_end: true, cook_done: true, ..heating(1, 200.0) }.unbounded());
+        assert!(!Snapshot { wet: true, ..heating(1, 56.0) }.unbounded());
+        assert!(!idle().unbounded());
     }
 
     #[test]

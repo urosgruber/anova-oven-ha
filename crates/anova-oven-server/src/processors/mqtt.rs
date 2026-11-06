@@ -14,7 +14,7 @@ mod milestones;
 mod recipes;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anova_oven_api::{CookProgress, OvenStatus, Recipe};
 use rumqttc::{AsyncClient, Event, LastWill, MqttOptions, Packet, QoS};
@@ -42,6 +42,28 @@ pub struct MqttConfig {
     pub topics: Topics,
     /// Local mode: announce the controls only it can drive.
     pub local: bool,
+    /// The broker drops one of two clients with the same ID, so a second
+    /// server (a test run on a Mac) needs its own.
+    pub client_id: String,
+    /// Stop a dry cook that nothing ends after this long; `None` is off.
+    pub safety_limit: Option<Duration>,
+}
+
+/// The safety limit when `ANOVA_SAFETY_LIMIT_HOURS` is not set.
+const DEFAULT_SAFETY_LIMIT_HOURS: f64 = 4.0;
+
+/// `ANOVA_SAFETY_LIMIT_HOURS`: hours, `0` for off. Unset or unreadable is
+/// the default; a typo must not turn the limit off.
+fn safety_limit(value: Option<&str>) -> Option<Duration> {
+    let hours = match value.map(|v| v.trim().parse::<f64>()) {
+        Some(Ok(h)) if h.is_finite() && h >= 0.0 => h,
+        Some(_) => {
+            warn!(value = ?value, "[mqtt] bad ANOVA_SAFETY_LIMIT_HOURS; using the default");
+            DEFAULT_SAFETY_LIMIT_HOURS
+        }
+        None => DEFAULT_SAFETY_LIMIT_HOURS,
+    };
+    (hours > 0.0).then(|| Duration::from_secs_f64(hours * 3600.0))
 }
 
 impl MqttConfig {
@@ -59,12 +81,17 @@ impl MqttConfig {
                     .unwrap_or_else(|_| "homeassistant".into()),
             },
             local,
+            client_id: std::env::var("ANOVA_MQTT_CLIENT_ID")
+                .ok()
+                .filter(|id| !id.trim().is_empty())
+                .unwrap_or_else(|| "anova-oven-server".into()),
+            safety_limit: safety_limit(std::env::var("ANOVA_SAFETY_LIMIT_HOURS").ok().as_deref()),
         })
     }
 
     fn options(&self) -> Result<MqttOptions, String> {
         let (host, port) = broker_address(&self.url)?;
-        let mut options = MqttOptions::new("anova-oven-server", host, port);
+        let mut options = MqttOptions::new(self.client_id.clone(), host, port);
         if let (Some(user), Some(pass)) = (&self.username, &self.password) {
             options.set_credentials(user, pass);
         }
@@ -126,6 +153,10 @@ pub async fn run(config: MqttConfig, mut sources: Sources) {
         last_recipes: None,
         last_snapshot: None,
         next_stage_ready: None,
+        safety_limit: config.safety_limit,
+        unbounded_since: None,
+        stop_reason: None,
+        end_anchor: None,
     };
     let mut poll = tokio::time::interval(POLL_INTERVAL);
 
@@ -222,6 +253,49 @@ struct Processor {
     /// mid-cook announces nothing.
     last_snapshot: Option<Snapshot>,
     next_stage_ready: Option<bool>,
+    /// Stop a dry cook that nothing ends after this long.
+    safety_limit: Option<Duration>,
+    /// Since when the running cook has been unbounded, for which cook,
+    /// stage and done state. A change of any of them starts the clock again.
+    unbounded_since: Option<(UnboundedKey, Instant)>,
+    /// Why the server stopped the cook, for the `cook_stopped` that follows.
+    stop_reason: Option<serde_json::Value>,
+    /// The timer value last seen and when it arrived. See [`EndAnchor`].
+    end_anchor: Option<EndAnchor>,
+}
+
+type UnboundedKey = (Option<String>, Option<usize>, bool);
+
+/// The oven reports the time left only now and then, but the state is
+/// published every 5 s. `now + time left` with an old report moves the end
+/// time later at every publish, then back when a new report arrives: the
+/// card's progress bar jumped. So the end time is worked out once per new
+/// report, from the moment that report arrived.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct EndAnchor {
+    current: u64,
+    total: u64,
+    /// The end time, in Unix seconds.
+    ends_at: i64,
+}
+
+impl EndAnchor {
+    /// The end time for `remaining` seconds left (of `total`), at `now`.
+    /// The same report again keeps the end time it gave the first time.
+    fn update(anchor: &mut Option<EndAnchor>, remaining: Option<u64>, total: u64, now: i64) -> Option<i64> {
+        let Some(current) = remaining else {
+            *anchor = None;
+            return None;
+        };
+        if let Some(a) = *anchor {
+            if a.current == current && a.total == total {
+                return Some(a.ends_at);
+            }
+        }
+        let a = EndAnchor { current, total, ends_at: now + current as i64 };
+        *anchor = Some(a);
+        Some(a.ends_at)
+    }
 }
 
 impl Processor {
@@ -426,7 +500,13 @@ impl Processor {
             status
         });
 
-        let state = state_json(status.as_ref(), model.current_cook.as_ref(), connected).to_string();
+        let ends_at = EndAnchor::update(
+            &mut self.end_anchor,
+            status.as_ref().and_then(OvenStatus::timer_remaining_secs),
+            status.as_ref().map_or(0, |s| s.timer_total_secs),
+            jiff::Timestamp::now().as_second(),
+        );
+        let state = state_json(status.as_ref(), model.current_cook.as_ref(), connected, ends_at).to_string();
         if force || self.last_state.as_deref() != Some(state.as_str()) {
             self.publish(self.topics.state(), true, state.clone()).await;
             self.last_state = Some(state);
@@ -441,7 +521,10 @@ impl Processor {
             self.last_cook = Some(cook);
         }
 
-        let snapshot = Snapshot::new(status.as_ref(), model.current_cook.as_ref(), connected);
+        let mut snapshot = Snapshot::new(status.as_ref(), model.current_cook.as_ref(), connected);
+        if let Some(prev) = &self.last_snapshot {
+            snapshot.carry(prev);
+        }
         let ready = snapshot.next_stage_ready && snapshot.connected;
         if force || self.next_stage_ready != Some(ready) {
             let availability = if ready { "online" } else { "offline" };
@@ -456,20 +539,61 @@ impl Processor {
                 done |= milestone == Milestone::CookDone;
                 if milestone == Milestone::CookStarted {
                     self.started_by = self.pending_started_by.take();
+                    self.stop_reason = None;
                 }
                 let source = if milestone.describes_previous() {
                     &prev
                 } else {
                     &snapshot
                 };
-                self.event(milestone, source.payload(milestone.as_str()))
-                    .await;
+                let mut payload = source.payload(milestone.as_str());
+                if milestone == Milestone::CookStopped {
+                    if let Some(reason) = self.stop_reason.take() {
+                        payload["reason"] = reason;
+                    }
+                }
+                self.event(milestone, payload).await;
             }
         }
+        let unbounded_too_long = self.unbounded_too_long(&snapshot);
         self.last_snapshot = Some(snapshot);
         if done && self.auto_stop {
-            self.stop_at_cook_done(sources).await;
+            self.stop_cook(sources, "auto_stop").await;
+        } else if let Some(limit) = unbounded_too_long {
+            info!(hours = limit.as_secs_f64() / 3600.0, "[mqtt] safety limit: stopping the cook");
+            self.stop_reason = Some(serde_json::json!({
+                "kind": "safety_limit",
+                "hours": limit.as_secs_f64() / 3600.0,
+            }));
+            self.stop_cook(sources, "safety_limit").await;
         }
+    }
+
+    /// The safety limit, once a dry cook with no end has run that long.
+    /// The clock starts again for a new cook, a new stage, or the end of
+    /// the last timer. It keeps running while the oven is offline (the oven
+    /// may still heat), but only an online oven can be stopped.
+    fn unbounded_too_long(&mut self, s: &Snapshot) -> Option<Duration> {
+        let limit = self.safety_limit?;
+        if !s.connected {
+            return None;
+        }
+        if !s.unbounded() {
+            self.unbounded_since = None;
+            return None;
+        }
+        let key: UnboundedKey = (s.cook_key.clone(), s.stage_index, s.cook_done);
+        let since = match &self.unbounded_since {
+            Some((k, t)) if *k == key || k.0.is_none() => *t,
+            _ => Instant::now(),
+        };
+        self.unbounded_since = Some((key, since));
+        if since.elapsed() < limit {
+            return None;
+        }
+        // Try again after one more limit if the stop fails.
+        self.unbounded_since = Some((self.unbounded_since.take()?.0, Instant::now()));
+        Some(limit)
     }
 
     async fn publish_auto_stop(&self) {
@@ -478,9 +602,11 @@ impl Processor {
     }
 
     /// The oven holds the temperature after its last timer; neither it nor
-    /// Anova's cloud stops the cook. With Auto stop on, the server does.
-    async fn stop_at_cook_done(&self, sources: &Sources) {
-        info!("[mqtt] cook done: auto stop");
+    /// Anova's cloud stops the cook. With Auto stop on, the server does. The
+    /// safety limit stops a dry cook that nothing ends. `why` names the
+    /// command in a `command_failed` event.
+    async fn stop_cook(&self, sources: &Sources, why: &str) {
+        info!(why, "[mqtt] stopping the cook");
         let (reply_tx, reply_rx) = oneshot::channel();
         if sources
             .sm_cmd_tx
@@ -492,9 +618,9 @@ impl Processor {
         }
         match reply_rx.await {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => self.command_failed("auto_stop", &e.to_string()).await,
+            Ok(Err(e)) => self.command_failed(why, &e.to_string()).await,
             Err(_) => {
-                self.command_failed("auto_stop", "state machine dropped the reply")
+                self.command_failed(why, "state machine dropped the reply")
                     .await
             }
         }
@@ -741,6 +867,7 @@ fn state_json(
     status: Option<&OvenStatus>,
     cook: Option<&anova_oven_api::CurrentCook>,
     connected: bool,
+    ends_at: Option<i64>,
 ) -> serde_json::Value {
     let Some(status) = status else {
         return serde_json::json!({ "connected": connected, "mode": "unknown" });
@@ -751,13 +878,9 @@ fn state_json(
     state["phase"] = status.phase().into();
     state["recipe_title"] = cook.map(|c| c.display_name().to_string()).into();
     state["timer_remaining_secs"] = remaining.into();
-    state["stage_ends_at"] = remaining
-        .map(|secs| {
-            let now = jiff::Timestamp::now().as_second();
-            jiff::Timestamp::from_second(now + secs as i64)
-                .map(|t| t.to_string())
-                .unwrap_or_default()
-        })
+    state["stage_ends_at"] = ends_at
+        .and_then(|t| jiff::Timestamp::from_second(t).ok())
+        .map(|t| t.to_string())
         .into();
     state
 }
@@ -830,7 +953,7 @@ mod tests {
 
     #[test]
     fn state_without_a_status_is_still_published() {
-        let v = state_json(None, None, false);
+        let v = state_json(None, None, false, None);
         assert_eq!(v["connected"], false);
     }
 
@@ -860,9 +983,36 @@ mod tests {
                 discovery: "homeassistant".into(),
             },
             local: true,
+            client_id: "anova-oven-test".into(),
+            safety_limit: None,
         };
         let options = config.options().unwrap();
         assert_eq!(options.broker_address(), ("broker.lan".to_string(), 1883));
-        assert_eq!(options.client_id(), "anova-oven-server");
+        assert_eq!(options.client_id(), "anova-oven-test");
+    }
+
+    #[test]
+    fn safety_limit_hours() {
+        assert_eq!(safety_limit(None), Some(Duration::from_secs(4 * 3600)));
+        assert_eq!(safety_limit(Some("2.5")), Some(Duration::from_secs(9000)));
+        assert_eq!(safety_limit(Some("0")), None);
+        // A typo keeps the default; it must not turn the limit off.
+        assert_eq!(safety_limit(Some("four")), Some(Duration::from_secs(4 * 3600)));
+        assert_eq!(safety_limit(Some("-1")), Some(Duration::from_secs(4 * 3600)));
+    }
+
+    #[test]
+    fn the_end_time_stays_put_between_oven_reports() {
+        let mut anchor = None;
+        // 600 s left at t=1000: ends at 1600.
+        assert_eq!(EndAnchor::update(&mut anchor, Some(600), 900, 1000), Some(1600));
+        // The same report, published again 5 s and 10 s later.
+        assert_eq!(EndAnchor::update(&mut anchor, Some(600), 900, 1005), Some(1600));
+        assert_eq!(EndAnchor::update(&mut anchor, Some(600), 900, 1010), Some(1600));
+        // A new report: 588 s left at t=1012.
+        assert_eq!(EndAnchor::update(&mut anchor, Some(588), 900, 1012), Some(1600));
+        // No timer: no end, and the anchor goes.
+        assert_eq!(EndAnchor::update(&mut anchor, None, 0, 1013), None);
+        assert_eq!(anchor, None);
     }
 }

@@ -623,6 +623,8 @@ the wrong recipe.
 | `ANOVA_MQTT_USERNAME`, `ANOVA_MQTT_PASSWORD` | unset | |
 | `ANOVA_MQTT_TOPIC_PREFIX` | `anova/oven` | |
 | `ANOVA_MQTT_DISCOVERY_PREFIX` | `homeassistant` | Home Assistant's default |
+| `ANOVA_MQTT_CLIENT_ID` | `anova-oven-server` | Use another ID for a second server on the same broker |
+| `ANOVA_SAFETY_LIMIT_HOURS` | `4` | Stop a dry cook that nothing ends; `0` is off |
 
 ### What it needs
 

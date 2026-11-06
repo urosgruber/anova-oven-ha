@@ -327,3 +327,26 @@ function programFromStagesForTest(card) {
   c._start();
   check("start carries the HA user", JSON.parse(h.calls.at(-1).data.payload).started_by === "user-123");
 }
+
+// --- 0.15: the timer takes seconds ---
+{
+  const src = require("fs").readFileSync(require("path").resolve(process.argv[2]), "utf8");
+  const a = src.indexOf("function parseMinutes"), b = src.indexOf("\nfunction stageBase");
+  const lib = new Function(`${src.slice(a, b)}; return { parseMinutes, fmtMinutes };`)();
+  const cases = { "3m30s": 3.5, "3m30": 3.5, "3 min 30 s": 3.5, "3.5": 3.5, "3,5": 3.5, "210s": 3.5,
+    "1h30": 90, "1:30": 90, "1:02:30": 62.5, "1h2m30s": 62.5, "45": 45 };
+  const bad = Object.entries(cases).filter(([t, v]) => Math.abs(lib.parseMinutes(t) - v) > 1e-9);
+  check("typed timer takes seconds", bad.length === 0);
+  if (bad.length) console.log(bad, bad.map(([t]) => lib.parseMinutes(t)));
+  check("timer field shows seconds", lib.fmtMinutes(3.5) === "3m30s" && lib.fmtMinutes(90) === "90");
+  const h = hass(); const c = new Card(); store["anova-oven-card:setup"] = null; c.setConfig({}); c.hass = h;
+  c._update({ end: "timer", timer: 3.5 });
+  c._start();
+  const stages = JSON.parse(h.calls.at(-1).data.payload).stages;
+  check("3m30s starts as 210 s", stages.at(-1).duration_secs === 210);
+  check("3m30s shows 3:30", c.shadowRoot.innerHTML.includes("3:30"));
+  c._step("end", 1, c._model());
+  check("+ from 3m30s goes to 4 min", c._view().timer === 4);
+  c._update({ timer: 3.5 }); c._step("end", -1, c._model());
+  check("- from 3m30s goes to 3 min", c._view().timer === 3);
+}
