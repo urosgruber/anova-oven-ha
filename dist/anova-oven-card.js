@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.15.0";
+const CARD_VERSION = "0.15.1";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -1045,7 +1045,7 @@ function recipeSummary(r) {
 }
 
 // Minutes from "90", "3.5", "1h30", "1 h 30 m", "45m", "2h", "1:30" (h:mm),
-// "1:30:15" (h:mm:ss), "3m30s", "3m30" or "90s". The result can have
+// "1:30:15" or "1:30.15" (h:mm:ss), "3m30s", "3m30" or "90s". The result can have
 // seconds: "3m30s" is 3.5. A number after "h" is minutes; after "m", seconds.
 function parseMinutes(text) {
   const t = String(text).trim().toLowerCase().replace(/\s+/g, "").replace(",", ".");
@@ -1054,7 +1054,7 @@ function parseMinutes(text) {
   const secs = (h, m, s) => Math.round(n(h) * 3600 + n(m) * 60 + n(s)) / 60;
   let m;
   if ((m = /^(\d+(?:\.\d+)?)$/.exec(t))) return Math.round(Number(m[1]) * 60) / 60;
-  if ((m = /^(\d+):(\d{1,2})(?::(\d{1,2}))?$/.exec(t))) return secs(m[1], m[2], m[3]);
+  if ((m = /^(\d+):(\d{1,2})(?:[:.](\d{1,2}))?$/.exec(t))) return secs(m[1], m[2], m[3]);
   if ((m = /^(\d+)(?:s|sec)$/.exec(t))) return secs(0, 0, m[1]);
   if ((m = /^(?:(\d+)h)?(\d+)(?:m|min)(?:(\d+)(?:s|sec)?)?$/.exec(t))) return secs(m[1], m[2], m[3]);
   if ((m = /^(\d+)h(?:(\d+)(?:m|min)?)?$/.exec(t))) return secs(m[1], m[2], 0);
