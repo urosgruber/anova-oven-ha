@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.2
+
+- The cog panel fits again without scrolling. Each item has one line of
+  text at most. Descale and the water tank share one item. The descale
+  steps show only when a descale is needed. Hover an item for the full
+  text.
+
 ## 0.12.1
 
 - "Turn off" in the cog panel works whenever the oven is idle. 0.12.0
