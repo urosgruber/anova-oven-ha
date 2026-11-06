@@ -24,10 +24,16 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.10.3";
+const CARD_VERSION = "0.11.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const SETUP_KEY = "anova-oven-card:setup";
+// The last program this browser started: titles and stages, so the chips of
+// a running cook can show each stage's temperature.
+const STARTED_KEY = "anova-oven-card:started";
+// A cool-down stage: the rear element with a 25 °C target. The heaters stay
+// off while the oven is hotter, the fan runs, and the vent is open.
+const COOL_C = 25;
 
 // The entities the card reads. It re-renders only when one of them changes.
 const WATCHED = [
@@ -183,10 +189,22 @@ class AnovaOvenCard extends HTMLElement {
   // --- Actions ------------------------------------------------------------
 
   _start() {
+    this._publishStart(programTitle(this._setup), programStages(this._setup));
+  }
+
+  _publishStart(title, stages) {
+    saveStarted({ title, stages });
     this._call("mqtt", "publish", {
       topic: `${this._config.mqtt_prefix}/cmd/start`,
-      payload: JSON.stringify({ title: programTitle(this._setup), stages: programStages(this._setup) }),
+      payload: JSON.stringify({ title, stages }),
     });
+  }
+
+  // Next stage works at any time while a later stage exists: it skips the
+  // rest of the current stage. The button entity is only available while a
+  // stage waits, so publish the command directly.
+  _nextStage() {
+    this._call("mqtt", "publish", { topic: `${this._config.mqtt_prefix}/cmd/next_stage`, payload: "PRESS" });
   }
 
   _addStep() {
@@ -419,8 +437,9 @@ class AnovaOvenCard extends HTMLElement {
             </div>` : select("mode", MODES.map((md) => ({ key: md.key, label: md.label, html: modeIcon(md.key) })), s.mode, off)}
 
           <div class="pair wide">
-            ${slider("temp", tValue === null ? 0 : (tValue - tlo) / (thi - tlo),
-              tValue === null ? "—" : fmtTemp(tValue, " °C"), tDisabled)}
+            ${slider("temp", live ? (m.temp === null ? 0 : (m.temp - tlo) / (thi - tlo)) : tValue === null ? 0 : (tValue - tlo) / (thi - tlo),
+              live ? liveTempLabel(m) : tValue === null ? "—" : fmtTemp(tValue, " °C"), tDisabled,
+              live && tValue !== null ? { mark: (tValue - tlo) / (thi - tlo) } : {})}
             <button class="feature toggle ${!live && s.sousVide ? "on" : ""}" id="sous-vide"
               title="Sous vide ${s.sousVide ? "on" : "off"}" aria-pressed="${s.sousVide}" ${off || live ? "disabled" : ""}>
               <ha-icon icon="mdi:water-thermometer"></ha-icon>
@@ -439,7 +458,10 @@ class AnovaOvenCard extends HTMLElement {
 
           <div class="pair go">
             ${live ? `
-              ${m.nextReady ? `<button class="feature action" id="next"><ha-icon icon="mdi:skip-next"></ha-icon>Next stage</button>` : ""}
+              ${stagePos(m).cur < stagePos(m).total ? `
+                <button class="feature action ${m.nextReady ? "start" : ""}" id="next"
+                  title="${m.nextReady ? "The next step waits for you" : "Skip the rest of this step"}">
+                  <ha-icon icon="${m.nextReady ? "mdi:play" : "mdi:skip-next"}"></ha-icon>${m.nextReady ? `Start step ${stagePos(m).cur + 1}` : `Skip to step ${stagePos(m).cur + 1}`}</button>` : ""}
               <button class="feature action stop ${armed ? "armed" : ""}" id="stop">
                 <ha-icon icon="mdi:stop"></ha-icon>${armed ? "Tap again to stop" : "Stop"}</button>` : `
               ${s.sel === 0 ? `
@@ -452,7 +474,7 @@ class AnovaOvenCard extends HTMLElement {
                   title="${s.waits ? `Step ${s.sel + 1} waits until you tap Next stage` : `Step ${s.sel + 1} starts when step ${s.sel} ends`}"
                   aria-pressed="${s.waits}" ${off ? "disabled" : ""}>
                   <ha-icon icon="${s.waits ? "mdi:hand-back-right-outline" : "mdi:arrow-right-bold-outline"}"></ha-icon>
-                  <span>${s.waits ? "Wait for me" : "Auto start"}</span>
+                  <span>${s.waits ? "Wait" : "Auto"}</span>
                 </button>`}
               <button class="feature action start" id="start" ${off || needsProbe ? "disabled" : ""}>
                 <ha-icon icon="mdi:play"></ha-icon>${startLabel(s)}</button>`}
@@ -551,8 +573,8 @@ class AnovaOvenCard extends HTMLElement {
         <div class="item">
           <div class="item-text">
             <b>Heating element prep</b>
-            <span>Rear 176 °C for 15 min, then top and bottom 176 °C for 15 min. Between them, let the oven cool,
-              open the door to air it, then tap Next stage. Afterwards, tap Stop.</span>
+            <span>Runs by itself: rear 176 °C for 15 min, a 15-minute cool-down with the vent open, top and
+              bottom 176 °C for 15 min, then a cool-down until you tap Stop.</span>
           </div>
           <button class="feature action start item-btn" id="prep" ${busy ? "disabled" : ""}><ha-icon icon="mdi:play"></ha-icon>Start</button>
         </div>
@@ -572,23 +594,26 @@ class AnovaOvenCard extends HTMLElement {
       </div>`;
   }
 
-  // Heating element prep, from the oven's manual: two timed stages at
-  // 176 °C; the second waits for Next stage, so the oven can cool between.
+  // Heating element prep, from the oven's manual, fully automatic: rear
+  // 176 °C for 15 min, a 15-minute cool-down, top and bottom 176 °C for
+  // 15 min, then a cool-down that lasts until Stop, so the oven does not
+  // hold 176 °C at the end.
   _startPrep() {
-    const stage = (elements, extra = {}) => ({
-      kind: "cook", temperature_c: 176, temperature_bulbs_mode: "dry", steam_pct: 0, fan_speed: 100,
+    const stage = (elements, temp, extra = {}) => ({
+      kind: "cook", temperature_c: temp, temperature_bulbs_mode: "dry", steam_pct: 0, fan_speed: 100,
       heating_element_top: elements.includes("top"),
       heating_element_rear: elements.includes("rear"),
       heating_element_bottom: elements.includes("bottom"),
-      timer_added: true, duration_secs: 15 * 60, ...extra,
+      user_action_required: false, ...extra,
     });
-    this._call("mqtt", "publish", {
-      topic: `${this._config.mqtt_prefix}/cmd/start`,
-      payload: JSON.stringify({
-        title: "Heating element prep",
-        stages: [stage(["rear"]), stage(["top", "bottom"], { user_action_required: true })],
-      }),
-    });
+    const timed = { timer_added: true, duration_secs: 15 * 60 };
+    const cool = { vent_open: true, title: "Cool down" };
+    this._publishStart("Element prep", [
+      stage(["rear"], 176, { ...timed, title: "Rear 176 °C" }),
+      stage(["rear"], COOL_C, { ...timed, ...cool }),
+      stage(["top", "bottom"], 176, { ...timed, title: "Top and bottom 176 °C" }),
+      stage(["rear"], COOL_C, cool),
+    ]);
     this._panel = null;
     this._render();
   }
@@ -599,7 +624,7 @@ class AnovaOvenCard extends HTMLElement {
     if ($("lamp")) $("lamp").onclick = () => this._toggleLamp();
     if ($("stop")) $("stop").onclick = () => this._stop();
     if ($("start")) $("start").onclick = () => this._start();
-    if ($("next")) $("next").onclick = () => this._call("button", "press", { entity_id: this._id("button", "next_stage") });
+    if ($("next")) $("next").onclick = () => this._nextStage();
     if ($("sous-vide")) $("sous-vide").onclick = () => this._update({ sousVide: !this._view().sousVide });
     if ($("waits")) $("waits").onclick = () => this._update({ waits: !this._view().waits });
     if ($("step-add")) $("step-add").onclick = () => this._addStep();
@@ -661,7 +686,7 @@ class AnovaOvenCard extends HTMLElement {
 
     // Sliders: drag for big changes; the value commits on release.
     this._bindDrag("temp", { ...temp, step: m.cooking ? 1 : this._view().sousVide ? 0.5 : 1,
-      label: (v) => fmtTemp(v, " °C"),
+      label: (v) => (m.cooking ? `${m.temp === null ? "—" : Math.round(m.temp)} → ${Math.round(v)} °C` : fmtTemp(v, " °C")),
       commit: (v) => (m.cooking ? this._setTarget(v) : this._update({ temp: v })) });
     this._bindDrag("steam", { lo: 0, hi: 100, step: 10, disabled: m.cooking || !m.connected || this._view().sousVide,
       label: (v) => steamLabel(m, { ...this._view(), steam: v }),
@@ -678,7 +703,11 @@ class AnovaOvenCard extends HTMLElement {
       return clamp(Math.round((o.lo + f * (o.hi - o.lo)) / o.step) * o.step, o.lo, o.hi);
     };
     const show = (v) => {
-      $(`${what}-fill`).style.width = pct((v - o.lo) / (o.hi - o.lo));
+      // While cooking, the fill is the oven's temperature; dragging moves
+      // the target mark.
+      const mark = $(`${what}-mark`);
+      if (mark) mark.style.left = pct((v - o.lo) / (o.hi - o.lo));
+      else $(`${what}-fill`).style.width = pct((v - o.lo) / (o.hi - o.lo));
       $(`${what}-value`).textContent = o.label(v);
     };
     track.onpointerdown = (ev) => {
@@ -769,7 +798,8 @@ function slider(what, f, label, disabled, opts = {}) {
     <div class="feature slider ${opts.tone || ""} ${buttons ? "" : "bare"} ${disabled ? "disabled" : ""}">
       ${buttons ? `<button class="pm" data-step="${what}:-1" aria-label="Lower" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:minus"></ha-icon></button>` : ""}
       <div class="track" id="${what}-track" role="slider" aria-valuetext="${esc(label)}">
-        <div class="fill" id="${what}-fill" style="width:${pct(f)}"></div>
+        <div class="fill ${opts.mark !== undefined ? "current" : ""}" id="${what}-fill" style="width:${pct(f)}"></div>
+        ${opts.mark !== undefined ? `<div class="mark" id="${what}-mark" style="left:${pct(opts.mark)}"></div>` : ""}
         <span class="track-value" id="${what}-value">${esc(label)}</span>
       </div>
       ${buttons ? `<button class="pm" data-step="${what}:1" aria-label="Higher" ${disabled ? "disabled" : ""}><ha-icon icon="mdi:plus"></ha-icon></button>` : ""}
@@ -916,8 +946,17 @@ function stepTitle(st) {
   return st.sousVide ? `Sous vide ${fmtTemp(st.temp, " °C")}` : `${mode} ${fmtTemp(st.temp, " °C")}${st.steam ? `, ${st.steam} % steam` : ""}`;
 }
 
+// Short program names: "180 °C", "Sous vide 56 °C", "220 °C · 30 % steam",
+// "220 → 180 °C · 2 steps".
 function programTitle(p) {
-  return p.steps.length === 1 ? stepTitle(p.steps[0]) : `${stepTitle(p.steps[0])} + ${p.steps.length - 1} more`;
+  const first = p.steps[0];
+  if (p.steps.length === 1) {
+    if (first.sousVide) return `Sous vide ${fmtTemp(first.temp, " °C")}`;
+    return `${fmtTemp(first.temp, " °C")}${first.steam ? ` · ${first.steam} % steam` : ""}`;
+  }
+  const last = p.steps[p.steps.length - 1];
+  const temps = first.temp === last.temp ? fmtTemp(first.temp, " °C") : `${fmtTemp(first.temp, "")} → ${fmtTemp(last.temp, " °C")}`;
+  return `${temps} · ${p.steps.length} steps`;
 }
 
 function startLabel(s) {
@@ -950,13 +989,18 @@ function stepChips(s, off) {
 
 // While cooking: the running cook's stages, done ones ticked.
 function runningChips(m) {
-  const match = /^(\d+) of (\d+)$/.exec(m.stage || "");
-  const cur = match ? Number(match[1]) : 1;
-  const total = match ? Number(match[2]) : 1;
+  const { cur, total } = stagePos(m);
+  const started = loadStarted();
+  const known = started && started.title === m.recipe && started.stages.length === total ? started.stages : null;
   const chips = Array.from({ length: total }, (_, i) => {
     const n = i + 1;
     const state = n < cur || (m.done && n === cur) ? "done" : n === cur ? "on" : "";
-    return `<span class="chip-step ${state}"><span class="n">${state === "done" ? "✓" : n}</span></span>`;
+    const sg = known && known[i];
+    const cool = sg && sg.temperature_c <= COOL_C && sg.vent_open;
+    const label = !sg ? "" : cool ? `<ha-icon icon="mdi:snowflake"></ha-icon>`
+      : `<span>${sg.kind === "preheat" ? "↑" : ""}${Math.round(sg.temperature_c)}°</span>`;
+    return `<span class="chip-step ${state}" title="${sg ? esc(sg.title || (sg.kind === "preheat" ? "Preheat" : `${Math.round(sg.temperature_c)} °C`)) : `Stage ${n}`}">
+      <span class="n">${state === "done" ? "✓" : n}</span>${label}</span>`;
   }).join("");
   return `<div class="feature steps running" aria-label="Stages">${chips}</div>`;
 }
@@ -991,17 +1035,37 @@ function progress(m) {
   return 0;
 }
 
+// The status line: the oven's state when idle, the program's name while
+// cooking. Details are in the progress row.
 function secondary(m) {
   const temp = m.temp === null ? "—" : `${Math.round(m.temp)} °C`;
-  if (!m.cooking) return `Idle · ${temp}${m.probe !== null ? ` · probe ${Math.round(m.probe)} °C` : ""}`;
-  const what = m.done ? "Done, still heating" : m.phase;
   const probe = m.probe !== null ? ` · probe ${Math.round(m.probe)} °C` : "";
-  return esc(`${m.recipe ? `${m.recipe} · ` : ""}${what} · ${temp}${probe}`);
+  if (!m.cooking) return `Idle · ${temp}${probe}`;
+  return esc(`${m.recipe || "Cooking"}${probe}`);
+}
+
+// "1 of 3" from the Stage sensor.
+function stagePos(m) {
+  const match = /^(\d+) of (\d+)$/.exec(m.stage || "");
+  return match ? { cur: Number(match[1]), total: Number(match[2]) } : { cur: 1, total: 1 };
 }
 
 function barLabel(m) {
-  const left = m.done ? "Done, still heating" : m.phase === "Preheating" ? "Preheating" : (m.stage ? `Stage ${m.stage}` : m.phase);
-  return `<span>${esc(left)}</span><span>${m.temp === null ? "" : `${Math.round(m.temp)} °C`}</span>`;
+  const { cur, total } = stagePos(m);
+  const step = total > 1 ? `Step ${cur}/${total}` : "";
+  const desc = /cool/i.test(m.stageDescription || "") ? "Cooling down" : m.phase === "Preheating" ? "Preheating" : "";
+  let left;
+  if (m.done) left = "Done, still heating";
+  else if (m.nextReady) left = `Step ${cur + 1} waits for you`;
+  else left = [step, desc].filter(Boolean).join(" · ") || m.phase;
+  const rem = remaining(m);
+  const right = m.done || m.nextReady ? "" : rem !== null ? `${clock(rem)} left` : "";
+  return `<span>${esc(left)}</span><span>${esc(right)}</span>`;
+}
+
+function liveTempLabel(m) {
+  const now = m.temp === null ? "—" : Math.round(m.temp);
+  return m.target === null ? `${now} °C` : `${now} → ${Math.round(m.target)} °C`;
 }
 
 function clock(secs) {
@@ -1051,6 +1115,17 @@ function loadSetup() {
     }
   } catch (_) { /* no storage */ }
   return { ...DEFAULT_SETUP, steps: [{ ...DEFAULT_STEP }] };
+}
+
+function loadStarted() {
+  try {
+    const v = JSON.parse(localStorage.getItem(STARTED_KEY) || "null");
+    return v && v.title && Array.isArray(v.stages) ? v : null;
+  } catch (_) { return null; }
+}
+
+function saveStarted(v) {
+  try { localStorage.setItem(STARTED_KEY, JSON.stringify(v)); } catch (_) { /* no storage */ }
 }
 
 function saveSetup(s) {
@@ -1144,6 +1219,10 @@ const STYLE = `
     background: rgba(var(--oven-rgb), .14); cursor: pointer; touch-action: none; user-select: none; }
   .slider.disabled .track { cursor: default; }
   .slider.bare { background: none; }
+  .fill.current { background: linear-gradient(90deg, rgba(var(--oven-rgb), .25), rgba(var(--oven-rgb), .6)); }
+  .fill.current::after { display: none; }
+  .mark { position: absolute; top: 50%; width: 4px; height: 22px; margin: -11px 0 0 -2px; border-radius: 2px;
+    background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, .25), 0 0 3px rgba(0, 0, 0, .3); }
   .slider.bare .track { margin: 0; border-radius: var(--r); }
   .slider.bare .track-value { line-height: var(--h); }
   .slider.steam .track { background: rgba(var(--rgb-light-blue-color, 3, 169, 244), .14); }
@@ -1183,7 +1262,7 @@ const STYLE = `
   .chip-step:disabled { opacity: .4; }
   .steps.running .chip-step { padding: 0 6px; }
   /* A fixed width, so Bake / Cook keeps its size when the label changes. */
-  .pair.go > .toggle.labeled { flex: 0 0 136px; display: inline-flex; align-items: center; justify-content: center;
+  .pair.go > .toggle.labeled { flex: 0 0 calc(var(--h) * 3); display: inline-flex; align-items: center; justify-content: center;
     gap: 6px; padding: 0 10px; white-space: nowrap; overflow: hidden;
     font-size: 14px; font-weight: 500; }
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.11.0
+
+- Heating element prep runs by itself: rear 176 °C for 15 min, a
+  15-minute cool-down with the vent open, top and bottom 176 °C for
+  15 min, then a cool-down until you tap Stop. The oven no longer holds
+  176 °C at the end. (Not tested on a real oven yet: watch the first run.)
+- Multi-step cooks: "Skip to step 2" is available while a later step
+  exists. When a step waits for you, the button turns orange and says
+  "Start step 2", and the progress row says "Step 2 waits for you".
+- Shorter texts: the status line shows only the program's name. The
+  progress row shows the step and the time left, for example "Step 1/4"
+  and "12:17 left". New programs get short names, for example
+  "220 → 180 °C · 2 steps".
+- During a cook, the temperature bar shows the oven's temperature as the
+  orange fill and the target as a white mark, with "143 → 176 °C".
+- During a cook, the step chips show each stage's temperature (and a
+  snowflake for a cool-down) when this phone or browser started it.
+- The button next to Bake / Cook is as wide as the three buttons above it.
+  Its labels are Preheat, Auto and Wait.
+
 ## 0.10.3
 
 - Steam now really sits next to the timer on cards of about 394 px and

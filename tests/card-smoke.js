@@ -36,7 +36,7 @@ check("idle renders the steps row with one chip and +", html().includes('data-ch
 check("start label is Bake", />\s*Bake<\/button>/.test(html()) || html().includes("</ha-icon>Bake</button>"));
 c._addStep();
 check("+ adds step 2 and selects it", c._setup.steps.length === 2 && c._setup.sel === 1);
-check("step 2 shows the remove x and the Waits toggle", html().includes('id="step-remove"') && html().includes('id="waits"') && html().includes("Auto start"));
+check("step 2 shows the remove x and the Waits toggle", html().includes('id="step-remove"') && html().includes('id="waits"') && html().includes("<span>Auto</span>"));
 c._update({ temp: 200, end: "timer", timer: 15 });
 check("controls edit only the selected step", c._setup.steps[1].temp === 200 && c._setup.steps[0].temp === 180);
 c._update({ waits: true });
@@ -147,4 +147,36 @@ function programFromStagesForTest(card) {
   const src = require("fs").readFileSync(require("path").resolve(process.argv[2]), "utf8");
   check("no container query left", !src.includes("@container"));
   c5.disconnectedCallback();
+}
+
+// --- 0.11: element prep, next stage, copy, temperature mark, running chips ---
+{
+  const c6 = new Card(); store["anova-oven-card:setup"] = null; c6.setConfig({});
+  let h6 = hass(); c6.hass = h6;
+  c6._startPrep();
+  const prep = JSON.parse(h6.calls.at(-1).data.payload);
+  check("element prep: 4 automatic stages", prep.stages.length === 4 && prep.stages.every((x) => x.user_action_required === false));
+  check("element prep: cool-downs at 25 °C with the vent open", [1, 3].every((i) => prep.stages[i].temperature_c === 25 && prep.stages[i].vent_open === true && prep.stages[i].heating_element_rear));
+  check("element prep: last cool-down has no timer", !prep.stages[3].timer_added && prep.stages[2].duration_secs === 900);
+  check("element prep: short title", prep.title === "Element prep");
+  h6 = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "1 of 4", "sensor.temperature": "143",
+    "sensor.target_temperature": "176", "sensor.current_recipe": "Element prep", "sensor.stage_ends_at": new Date(Date.now() + 737000).toISOString(),
+    "number.set_timer": "15" });
+  c6.hass = h6;
+  const o = c6.shadowRoot.innerHTML;
+  check("a later stage exists: Skip to step 2", o.includes("Skip to step 2"));
+  check("status line is only the program name", /id="secondary">Element prep</.test(o));
+  check("progress row shows step and time left", o.includes("Step 1/4") && /\d+:\d\d left/.test(o));
+  check("temperature shows current → target", o.includes("143 → 176 °C") && o.includes('id="temp-mark"'));
+  check("running chips show stage temperatures and a snowflake", o.includes("176°") && o.includes("mdi:snowflake"));
+  c6._nextStage();
+  check("skip publishes cmd/next_stage", h6.calls.at(-1).data.topic === "anova/oven/cmd/next_stage");
+  h6 = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "1 of 2", "binary_sensor.next_stage_ready": "on",
+    "sensor.current_recipe": "x" });
+  c6.hass = h6;
+  check("a waiting step: Start step 2, and the row says so", c6.shadowRoot.innerHTML.includes("Start step 2") && c6.shadowRoot.innerHTML.includes("Step 2 waits for you"));
+  const c7 = new Card(); store["anova-oven-card:setup"] = null; c7.setConfig({}); c7.hass = hass();
+  c7._addStep(); c7._update({ temp: 220 }); c7._update({ sel: 0 });
+  check("short program title", programTitleOf(c7) === "180 → 220 °C · 2 steps");
+  function programTitleOf(card) { card._start(); return JSON.parse(card._hass.calls.at(-1).data.payload).title; }
 }
