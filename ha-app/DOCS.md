@@ -35,6 +35,12 @@ type: custom:anova-oven-card
 title: Oven
 ```
 
+The oven never stops by itself: after the last timer, it holds the
+temperature until you tap Stop. With **Auto stop** on (the default), the
+App stops it when the last timer ends, also for a cook started on the
+oven. Turn it on or off in the card's cog panel, or with the "Auto stop"
+switch of the Anova Oven device.
+
 If the oven hangs on a smart plug (for example a Shelly), the card can
 switch it and show its power draw. Add the plug's entities:
 

@@ -267,7 +267,7 @@ function programFromStagesForTest(card) {
   check("+ on the temperature adds 1 °C", c._view().temp === 181);
   const h = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.target_temperature": "176" }); c.hass = h;
   c._step("temp", -1, c._model());
-  check("- on a running cook sets the target 1 °C lower", h.calls.at(-1).data.value === 175);
+  check("- on a running cook sets the target 1 °C lower", h.calls.at(-1).data.topic === "anova/oven/cmd/temperature" && h.calls.at(-1).data.payload === "175");
 }
 
 // --- 0.12.4: test findings: finished timer, steam setting, stable end ---
@@ -285,4 +285,37 @@ function programFromStagesForTest(card) {
   c._endsAt = null; c._stableEnd(t);
   check("end time ignores a 1 s wobble", c._stableEnd(t + 1000) === t && c._stableEnd(t - 1000) === t);
   check("end time follows a real change", c._stableEnd(t + 300000) === t + 300000);
+}
+
+// --- 0.13: auto stop, count-up, sous vide in 0.1 °C ---
+{
+  const at = (v) => ({ state: v, attributes: {}, last_changed: new Date(Date.now() - 754000).toISOString() });
+  const base = { "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "1 of 1", "sensor.current_recipe": "x",
+    "switch.auto_stop": "on", "sensor.target_temperature": "180", "sensor.temperature": "150" };
+  // A timer cook with Auto stop on says "Stops".
+  let h = hass({ ...base, "sensor.stage_ends_at": new Date(Date.now() + 600000).toISOString(), "number.set_timer": "20" });
+  h.states[`sensor.${P}_current_recipe`].attributes = { stages: [{ kind: "cook", temperature_c: 180, timer_added: true, duration_secs: 1200 }] };
+  let c = new Card(); c.setConfig({}); c.hass = h;
+  check("auto stop on: the last step says Stops HH:MM", /Stops \d\d:\d\d/.test(c.shadowRoot.innerHTML));
+  c._panel = "maintenance"; c._render();
+  check("cog panel: Auto stop item, descale in the head", c.shadowRoot.innerHTML.includes('id="auto-stop"') && c.shadowRoot.innerHTML.includes('class="head-tags"'));
+  c.shadowRoot.getElementById = () => null;
+  c._call("switch", "turn_off", { entity_id: "switch.anova_oven_auto_stop" });
+  // No end: the time counts up from the cook's start.
+  h = hass({ ...base });
+  h.states[`binary_sensor.${P}_cooking`] = at("on");
+  h.states[`sensor.${P}_current_recipe`].attributes = { stages: [{ kind: "cook", temperature_c: 180 }] };
+  c = new Card(); c.setConfig({}); c.hass = h;
+  let o = c.shadowRoot.innerHTML;
+  check("no end: the time counts up", /12:3\d in/.test(o) && /Since \d\d:\d\d/.test(o) && !o.includes('data-step="end:'));
+  // Sous vide: the wet bulb and the stage's target, in 0.1 °C steps.
+  h = hass({ ...base, "sensor.wet_bulb_temperature": "55.43", "sensor.target_temperature": "unknown" });
+  h.states[`sensor.${P}_current_recipe`].attributes = { stages: [{ kind: "cook", temperature_c: 56.5, temperature_bulbs_mode: "wet", steam_pct: 100 }] };
+  c = new Card(); c.setConfig({}); c.hass = h;
+  check("sous vide cook: wet bulb → stage target", c.shadowRoot.innerHTML.includes("55.4 → 56.5 °C"));
+  c._step("temp", 1, c._liveModel());
+  check("sous vide cook: + adds 0.1 °C", h.calls.at(-1).data.payload === "56.6");
+  const c2 = new Card(); store["anova-oven-card:setup"] = null; c2.setConfig({}); c2.hass = hass();
+  c2._update({ sousVide: true, temp: 56 }); c2._step("temp", 1, c2._model());
+  check("sous vide setup: + adds 0.1 °C", c2._view().temp === 56.1);
 }

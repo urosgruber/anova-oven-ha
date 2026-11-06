@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.13.0
+
+- Auto stop: the App stops the oven when the last timer of a cook ends.
+  Without it, the oven holds the temperature until you tap Stop. It works
+  for every cook, also one started on the oven. A cook with no timer runs
+  until you stop it, as before. Turn it on or off in the cog panel, or
+  with the new "Auto stop" switch in Home Assistant. It is on by default.
+- With Auto stop on, the progress row says "Stops 16:40" on the last step.
+- A cook with no end counts up: the timer row shows how long the cook has
+  run, for example "12:34 in", and the progress row shows "Since 16:20".
+- Sous vide: - and + change the temperature by 0.1 °C. During a sous vide
+  cook, the temperature row shows the wet-bulb temperature and the step's
+  target, for example "55.4 → 56.5 °C".
+- The cog panel shows the descale status in its title row, so the panel
+  has room for Auto stop.
+
 ## 0.12.4
 
 - The temperature's - and + change it by 1 °C (was 5 °C), also during a
