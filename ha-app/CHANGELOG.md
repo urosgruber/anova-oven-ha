@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.12.4
+
+- The temperature's - and + change it by 1 °C (was 5 °C), also during a
+  cook. Use the slider for big changes. With sous vide on, the step stays
+  0.5 °C.
+- When a timer ends, the card keeps the timer selected and shows "Done".
+  Before, it switched to "until you stop". The progress row says "Done ·
+  holding 100 °C", because the oven keeps the temperature until you tap
+  Stop.
+- During a cook, the steam row shows the running step's steam setting.
+  Before, it showed the oven's humidity reading, which stays at 0 % in
+  the steam mode that the card uses.
+- The progress row shows when the step ends, for example "Ends 15:35".
+  The time left stays in the timer row, so it no longer shows twice.
+- The power draw in the status line is always visible. A long program
+  name now shortens with "…" instead of the power draw.
+- The progress bar moves smoothly. Before, it jumped back and forth,
+  because the end time from the App moved by up to a second at every
+  update.
+
 ## 0.12.3
 
 - The cog panel shows a water tag only when the oven reports its tank as

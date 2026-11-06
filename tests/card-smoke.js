@@ -167,8 +167,8 @@ function programFromStagesForTest(card) {
   c6.hass = h6;
   const o = c6.shadowRoot.innerHTML;
   check("a later stage exists: Skip to step 2", o.includes("Skip to step 2"));
-  check("status line is only the program name", /id="secondary">Element prep</.test(o));
-  check("progress row shows step and time left", o.includes("Step 1/4") && /\d+:\d\d left/.test(o));
+  check("status line is only the program name", /id="secondary"><span class="sec-main">Element prep<\/span><\/div>/.test(o));
+  check("progress row shows the step and when it ends", o.includes("Step 1/4") && /Ends \d\d:\d\d/.test(o));
   check("temperature shows current → target", o.includes("143 → 176 °C") && o.includes('id="temp-mark"'));
   check("running chips show stage temperatures and a snowflake", o.includes("176°") && o.includes("mdi:snowflake"));
   const c8 = new Card(); c8.setConfig({}); c8.hass = h6;
@@ -210,7 +210,7 @@ function programFromStagesForTest(card) {
   const tools = (c) => { c._panel = "maintenance"; c._render(); return c.shadowRoot.innerHTML; };
 
   let c = card(withPlug({}, "on", 2));
-  check("idle status line shows the power draw", /id="secondary">Idle · 23 °C · 2 W</.test(c.shadowRoot.innerHTML));
+  check("idle status line shows the power draw", c.shadowRoot.innerHTML.includes('<span class="sec-main">Idle · 23 °C</span><span class="sec-power"> · 2 W</span>'));
   check("idle: Turn off in the cog panel", tools(c).includes('id="power-off"'));
   c._power("off");
   check("Turn off needs a second tap", !c._hass.calls.some((x) => x.s === "turn_off"));
@@ -224,7 +224,7 @@ function programFromStagesForTest(card) {
 
   c = card(withPlug({ "binary_sensor.connected": "off" }, "off", 0));
   let o = c.shadowRoot.innerHTML;
-  check("plug off: Power off, and Turn on in place of Bake", o.includes(">Power off · 0 W<") && o.includes('id="power-on"') && !o.includes('id="start"'));
+  check("plug off: Power off, and Turn on in place of Bake", o.includes('>Power off</span><span class="sec-power"> · 0 W<') && o.includes('id="power-on"') && !o.includes('id="start"'));
   c._power("on");
   check("Turn on is one tap", c._hass.calls.at(-1).s === "turn_on");
 
@@ -258,4 +258,31 @@ function programFromStagesForTest(card) {
   c.hass = hass({ "binary_sensor.descale_required": "unavailable", "binary_sensor.water_tank_empty": "on" });
   o = c.shadowRoot.innerHTML;
   check("descale unavailable: unknown; tank empty: water tag", o.includes(">unknown<") && o.includes('Water <span class="tag warn">empty'));
+}
+
+// --- 0.12.4: - and + on the temperature are 1 °C ---
+{
+  const c = new Card(); store["anova-oven-card:setup"] = null; c.setConfig({}); c.hass = hass();
+  c._step("temp", 1, c._model());
+  check("+ on the temperature adds 1 °C", c._view().temp === 181);
+  const h = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.target_temperature": "176" }); c.hass = h;
+  c._step("temp", -1, c._model());
+  check("- on a running cook sets the target 1 °C lower", h.calls.at(-1).data.value === 175);
+}
+
+// --- 0.12.4: test findings: finished timer, steam setting, stable end ---
+{
+  const stages = [{ kind: "cook", temperature_c: 100, steam_pct: 100, timer_added: true, duration_secs: 300 }];
+  const h = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "1 of 1", "sensor.steam": "0",
+    "sensor.target_temperature": "100", "sensor.current_recipe": "x", event: "cook_done" });
+  h.states[`sensor.${P}_current_recipe`].attributes = { stages };
+  const c = new Card(); c.setConfig({}); c.hass = h;
+  const o = c.shadowRoot.innerHTML;
+  check("finished timer: the timer stays selected, Done without - and +", /class="option on"[^>]*data-key="timer"/.test(o) && o.includes(">Done<") && !o.includes('data-step="end:'));
+  check("done: the bar says what the oven does", o.includes("Done · holding 100 °C"));
+  check("steam row shows the step's steam setting, not the 0 reading", o.includes("Steam 100 %"));
+  const t = Date.parse("2026-11-06T15:40:00Z");
+  c._endsAt = null; c._stableEnd(t);
+  check("end time ignores a 1 s wobble", c._stableEnd(t + 1000) === t && c._stableEnd(t - 1000) === t);
+  check("end time follows a real change", c._stableEnd(t + 300000) === t + 300000);
 }
