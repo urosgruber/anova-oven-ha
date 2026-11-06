@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.16.0
+
+Fixes from a code review.
+
+- Safety limit: it keeps working while the MQTT broker is away. Before,
+  the App waited for the broker, and the limit did not run.
+- At start, the App waits up to 5 minutes for the MQTT broker. Before, it
+  turned MQTT off for the whole run when the broker started later, and
+  the safety limit and Auto stop were off.
+- When the App cannot stop the oven (Auto stop or the safety limit), the
+  phones get a message, and the App tries again every 5 minutes.
+- A safety stop of a cook that holds after its timer now sends the
+  "Safety stop" message too.
+- The safety limit now also covers a preheat that waits for you, and it
+  ignores the timer of the next step.
+- "The water tank is empty" now comes for steam steps too, not only for
+  sous vide. It comes once per step and goes to the person who started
+  the cook.
+- After an App restart during a cook, the App no longer sends "The oven
+  is at 200 °C" again to every phone.
+- An oven set to °F gets "The oven is at 400 °F."
+- Card: tapping the running timer shows the time left. Leaving the field
+  without a change no longer restarts the countdown.
+- Card: "1.30" in the timer field is refused, because it can mean 1 h 30
+  or 1 min 30. Type 1:30 or 1m30s.
+- Card: the progress bar is right for timers with seconds.
+- Card: "Done" stays during the hold, also after a later notification.
+
 ## 0.15.3
 
 - The timer on the card ticks evenly, one second at a time. Before, it
