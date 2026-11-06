@@ -125,6 +125,38 @@ def message(hass, a):
     return None
 
 
+# Events that never make a notification. Every event type the server
+# announces is either here or has a text in message(); a test checks it.
+QUIET = {"cook_started", "command_failed"}
+
+
+def handle(hass, msg):
+    """Notify for one websocket message; return the services it went to."""
+    if msg.get("type") != "event":
+        return []
+    trigger = (msg.get("event") or {}).get("variables", {}).get("trigger") or {}
+    old, new = trigger.get("from_state"), trigger.get("to_state")
+    # A new event changes the state (its time). Skip the entity becoming
+    # available or unavailable.
+    if not old or not new or new.get("state") in ("unavailable", "unknown") \
+            or old.get("state") in ("unavailable", "unknown"):
+        return []
+    attributes = new.get("attributes") or {}
+    text = message(hass, attributes)
+    if not text:
+        return []
+    title, body = text
+    sent = []
+    for service in targets(hass, attributes.get("started_by")):
+        reply = hass.call({
+            "type": "call_service", "domain": "notify", "service": service,
+            "service_data": {"title": title, "message": body, "data": {"group": "anova-oven"}},
+        })
+        log(f"{attributes.get('event_type')} -> {service}: {'sent' if reply.get('success') else reply}")
+        sent.append(service)
+    return sent
+
+
 def main():
     hass = Hass()
     hass.call({
@@ -133,27 +165,7 @@ def main():
     })
     log("watching the oven's events")
     while True:
-        msg = hass.receive()
-        if msg.get("type") != "event":
-            continue
-        trigger = (msg.get("event") or {}).get("variables", {}).get("trigger") or {}
-        old, new = trigger.get("from_state"), trigger.get("to_state")
-        # A new event changes the state (its time). Skip the entity becoming
-        # available or unavailable.
-        if not old or not new or new.get("state") in ("unavailable", "unknown") \
-                or old.get("state") in ("unavailable", "unknown"):
-            continue
-        attributes = new.get("attributes") or {}
-        text = message(hass, attributes)
-        if not text:
-            continue
-        title, body = text
-        for service in targets(hass, attributes.get("started_by")):
-            reply = hass.call({
-                "type": "call_service", "domain": "notify", "service": service,
-                "service_data": {"title": title, "message": body, "data": {"group": "anova-oven"}},
-            })
-            log(f"{attributes.get('event_type')} -> {service}: {'sent' if reply.get('success') else reply}")
+        handle(hass, hass.receive())
 
 
 if __name__ == "__main__":

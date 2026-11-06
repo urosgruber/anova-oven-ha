@@ -69,8 +69,10 @@ app is in `ha-app/`.
    The `#release` part matters: HA then reads the `release` branch.
 2. Install **Anova Oven**.
 
-**Release a new version:** raise `version` in `ha-app/config.yaml`, add an
-entry at the top of `ha-app/CHANGELOG.md`, and push to `main`. That is all. GitHub Actions (`.github/workflows/ha-app.yml`):
+**Release a new version:** raise `version` in `ha-app/config.yaml` and
+`CARD_VERSION` in `dist/anova-oven-card.js`, add an entry at the top of
+`ha-app/CHANGELOG.md`, and push to `main`. A test fails if the three
+versions differ. That is all. GitHub Actions (`.github/workflows/ha-app.yml`):
 
 1. tests the server,
 2. builds and pushes `ghcr.io/urosgruber/anova-oven-ha-amd64:<version>`,
@@ -89,6 +91,26 @@ takes about a minute.
 The oven still connects on port 443, and HA owns 443. The app listens on
 4443. A gateway destination-NAT rule, only for the oven's IP address,
 changes 443 to 4443. See `ha-app/DOCS.md`.
+
+## Tests
+
+CI runs all three on every push. Run them before a push:
+
+```sh
+cargo test -p anova-oven-server                    # the server
+node tests/card-smoke.js dist/anova-oven-card.js   # the dashboard card
+python3 -m unittest discover -s tests -v           # the app scripts
+```
+
+The Python tests also check rules across files: one version in the app,
+the card and the changelog; `run.sh` reads every app option; every server
+event has a notification text or is quiet on purpose. They also fail on a
+private IP address or a secret (key, token, JWT) in a tracked file.
+
+The repo is public, so the exact home names (domains, hosts, the public
+IP) are not in these tests. A local git hook checks them before each
+commit. Git does not push hooks, so install it once in each clone, from
+the copy in the home network docs.
 
 ## GitHub Actions
 

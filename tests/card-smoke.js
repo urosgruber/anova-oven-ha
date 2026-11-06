@@ -350,3 +350,23 @@ function programFromStagesForTest(card) {
   c._update({ timer: 3.5 }); c._step("end", -1, c._model());
   check("- from 3m30s goes to 3 min", c._view().timer === 3);
 }
+
+// --- The re-render rule: HA sets hass for every state change in the whole
+// instance. The card renders only for a watched entity, and never while the
+// user types, taps or drags (that would replace the element under the finger).
+{
+  const c = new Card(); store["anova-oven-card:setup"] = null; c.setConfig({});
+  let h = hass(); c.hass = h;
+  let renders = 0; const render = c._render.bind(c); c._render = () => { renders++; render(); };
+  const next = (over) => ({ ...h, states: { ...h.states, ...over } });
+  h = next({ "sensor.living_room_temperature": st("21") }); c.hass = h;
+  check("an unrelated entity does not re-render", renders === 0);
+  h = next({ [`sensor.${P}_temperature`]: st("150") }); c.hass = h;
+  check("a watched entity re-renders", renders === 1);
+  c._typing = true;
+  h = next({ [`sensor.${P}_temperature`]: st("160") }); c.hass = h;
+  check("no re-render while typing; it waits", renders === 1 && c._dirty === true);
+  c._typing = false; c._holding = true;
+  h = next({ [`sensor.${P}_temperature`]: st("170") }); c.hass = h;
+  check("no re-render while a button is held", renders === 1);
+}

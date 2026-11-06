@@ -36,6 +36,10 @@ jobs:
       - name: Test the dashboard card
         run: node tests/card-smoke.js dist/anova-oven-card.js
 
+      # The app's Python scripts, rules across files, and a leak check.
+      - name: Test the app scripts
+        run: python3 -m unittest discover -s tests -v
+
   release:
     name: Release app image
     needs: test
