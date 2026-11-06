@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.15.2
+
+- A cook started on the oven: the card counts up from the start of the
+  step, the same as the oven's display. Before, it counted from the
+  start of the cook, so the preheat time was added.
+- After the oven's own preheat, the card says "Cooking". Before, it said
+  "Preheating" for the whole cook when the step had no timer.
+
 ## 0.15.1
 
 - The timer also takes hours, minutes and seconds as 3:30.40 (3 hours
