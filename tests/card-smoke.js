@@ -178,6 +178,12 @@ function programFromStagesForTest(card) {
   check("+ on a running timer adds 5 min to the time left", plus.topic === "anova/oven/cmd/timer" && Math.abs(Number(plus.payload) - 1037) <= 2);
   c6._step("end", -1, c6._model());
   check("- on a running timer takes 5 min from the time left", Math.abs(Number(h6.calls.at(-1).data.payload) - 437) <= 2);
+  c6.hass = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "4 of 4", "sensor.temperature": "174",
+    "sensor.target_temperature": "25", "sensor.current_recipe": "Element prep" });
+  const cool = c6.shadowRoot.innerHTML;
+  check("no end: no - and + next to Until you stop", cool.includes("Until you stop") && !cool.includes('data-step="end:'));
+  check("a 25 °C mark stays inside the bar", /id="temp-mark" style="left:calc\(6px \+ \(100% - 12px\) \* 0\)"/.test(cool));
+  c6.hass = h6;
   c6._nextStage();
   check("skip publishes cmd/next_stage", h6.calls.at(-1).data.topic === "anova/oven/cmd/next_stage");
   h6 = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "1 of 2", "binary_sensor.next_stage_ready": "on",

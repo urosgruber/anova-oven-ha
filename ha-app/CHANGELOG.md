@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.3
+
+- The target mark in the temperature bar stays fully visible at the ends,
+  for example at 25 °C during a cool-down.
+- "Until you stop" has no - and + next to it, so the full text fits.
+
 ## 0.11.2
 
 - Fix the timer's - and + during a cook. They now add or take 5 minutes
