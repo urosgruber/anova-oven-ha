@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.1
+
+- The timer also takes hours, minutes and seconds as 3:30.40 (3 hours
+  30 minutes 40 seconds). 3:30 is still 3 hours 30 minutes.
+
 ## 0.15.0
 
 - New notification: "The oven is at 200 °C." It comes when a step

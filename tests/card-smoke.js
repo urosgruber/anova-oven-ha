@@ -334,7 +334,7 @@ function programFromStagesForTest(card) {
   const a = src.indexOf("function parseMinutes"), b = src.indexOf("\nfunction stageBase");
   const lib = new Function(`${src.slice(a, b)}; return { parseMinutes, fmtMinutes };`)();
   const cases = { "3m30s": 3.5, "3m30": 3.5, "3 min 30 s": 3.5, "3.5": 3.5, "3,5": 3.5, "210s": 3.5,
-    "1h30": 90, "1:30": 90, "1:02:30": 62.5, "1h2m30s": 62.5, "45": 45 };
+    "1h30": 90, "1:30": 90, "1:02:30": 62.5, "3:30.40": 210 + 40 / 60, "3:30,40": 210 + 40 / 60, "1h2m30s": 62.5, "45": 45 };
   const bad = Object.entries(cases).filter(([t, v]) => Math.abs(lib.parseMinutes(t) - v) > 1e-9);
   check("typed timer takes seconds", bad.length === 0);
   if (bad.length) console.log(bad, bad.map(([t]) => lib.parseMinutes(t)));
