@@ -153,8 +153,7 @@ pub async fn run(config: MqttConfig, mut sources: Sources) {
         last_recipes: None,
         last_snapshot: None,
         next_stage_ready: None,
-        safety_limit: config.safety_limit,
-        unbounded_since: None,
+        safety: SafetyClock::new(config.safety_limit),
         stop_reason: None,
         end_anchor: None,
     };
@@ -253,18 +252,59 @@ struct Processor {
     /// mid-cook announces nothing.
     last_snapshot: Option<Snapshot>,
     next_stage_ready: Option<bool>,
-    /// Stop a dry cook that nothing ends after this long.
-    safety_limit: Option<Duration>,
-    /// Since when the running cook has been unbounded, for which cook,
-    /// stage and done state. A change of any of them starts the clock again.
-    unbounded_since: Option<(UnboundedKey, Instant)>,
+    /// The safety limit for dry cooks that nothing ends.
+    safety: SafetyClock,
     /// Why the server stopped the cook, for the `cook_stopped` that follows.
     stop_reason: Option<serde_json::Value>,
     /// The timer value last seen and when it arrived. See [`EndAnchor`].
     end_anchor: Option<EndAnchor>,
 }
 
+/// The safety limit: how long a dry cook that nothing ends has run.
+#[derive(Debug)]
+struct SafetyClock {
+    limit: Option<Duration>,
+    /// Since when, for which cook, stage and done state. A change of any of
+    /// them starts the clock again.
+    since: Option<(UnboundedKey, Instant)>,
+}
+
 type UnboundedKey = (Option<String>, Option<usize>, bool);
+
+impl SafetyClock {
+    fn new(limit: Option<Duration>) -> Self {
+        SafetyClock { limit, since: None }
+    }
+
+    /// The limit, once the cook in `s` has been unbounded that long at
+    /// `now`. The clock starts again for a new cook, a new stage, or the end
+    /// of the last timer. It keeps running while the oven is offline (the
+    /// oven may still heat), but only an online oven can be stopped. After
+    /// it fires, it fires again one limit later if the cook still runs (the
+    /// stop failed).
+    fn check(&mut self, s: &Snapshot, now: Instant) -> Option<Duration> {
+        let limit = self.limit?;
+        if !s.connected {
+            return None;
+        }
+        if !s.unbounded() {
+            self.since = None;
+            return None;
+        }
+        let key: UnboundedKey = (s.cook_key.clone(), s.stage_index, s.cook_done);
+        let since = match &self.since {
+            // A cook ID that arrives late is the same cook.
+            Some((k, t)) if *k == key || (k.0.is_none() && k.1 == key.1 && k.2 == key.2) => *t,
+            _ => now,
+        };
+        if now.duration_since(since) < limit {
+            self.since = Some((key, since));
+            return None;
+        }
+        self.since = Some((key, now));
+        Some(limit)
+    }
+}
 
 /// The oven reports the time left only now and then, but the state is
 /// published every 5 s. `now + time left` with an old report moves the end
@@ -555,7 +595,7 @@ impl Processor {
                 self.event(milestone, payload).await;
             }
         }
-        let unbounded_too_long = self.unbounded_too_long(&snapshot);
+        let unbounded_too_long = self.safety.check(&snapshot, Instant::now());
         self.last_snapshot = Some(snapshot);
         if done && self.auto_stop {
             self.stop_cook(sources, "auto_stop").await;
@@ -567,33 +607,6 @@ impl Processor {
             }));
             self.stop_cook(sources, "safety_limit").await;
         }
-    }
-
-    /// The safety limit, once a dry cook with no end has run that long.
-    /// The clock starts again for a new cook, a new stage, or the end of
-    /// the last timer. It keeps running while the oven is offline (the oven
-    /// may still heat), but only an online oven can be stopped.
-    fn unbounded_too_long(&mut self, s: &Snapshot) -> Option<Duration> {
-        let limit = self.safety_limit?;
-        if !s.connected {
-            return None;
-        }
-        if !s.unbounded() {
-            self.unbounded_since = None;
-            return None;
-        }
-        let key: UnboundedKey = (s.cook_key.clone(), s.stage_index, s.cook_done);
-        let since = match &self.unbounded_since {
-            Some((k, t)) if *k == key || k.0.is_none() => *t,
-            _ => Instant::now(),
-        };
-        self.unbounded_since = Some((key, since));
-        if since.elapsed() < limit {
-            return None;
-        }
-        // Try again after one more limit if the stop fails.
-        self.unbounded_since = Some((self.unbounded_since.take()?.0, Instant::now()));
-        Some(limit)
     }
 
     async fn publish_auto_stop(&self) {
@@ -999,6 +1012,80 @@ mod tests {
         // A typo keeps the default; it must not turn the limit off.
         assert_eq!(safety_limit(Some("four")), Some(Duration::from_secs(4 * 3600)));
         assert_eq!(safety_limit(Some("-1")), Some(Duration::from_secs(4 * 3600)));
+    }
+
+    /// A dry cook with no timer, stage 1 of cook `id`.
+    fn unbounded(id: Option<&str>) -> Snapshot {
+        Snapshot {
+            connected: true,
+            cooking: true,
+            cook_key: id.map(String::from),
+            stage_index: Some(1),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn safety_clock_stops_a_dry_cook_with_no_end_after_the_limit() {
+        let hour = Duration::from_secs(3600);
+        let t0 = Instant::now();
+        let mut clock = SafetyClock::new(Some(4 * hour));
+        let cook = unbounded(Some("a"));
+        assert_eq!(clock.check(&cook, t0), None);
+        assert_eq!(clock.check(&cook, t0 + 3 * hour), None);
+        assert_eq!(clock.check(&cook, t0 + 4 * hour), Some(4 * hour));
+        // The stop failed: once more after another limit, not at every poll.
+        assert_eq!(clock.check(&cook, t0 + 4 * hour + Duration::from_secs(5)), None);
+        assert_eq!(clock.check(&cook, t0 + 8 * hour), Some(4 * hour));
+    }
+
+    #[test]
+    fn safety_clock_starts_again_for_a_new_stage_cook_or_end() {
+        let hour = Duration::from_secs(3600);
+        let t0 = Instant::now();
+        let mut clock = SafetyClock::new(Some(4 * hour));
+        clock.check(&unbounded(Some("a")), t0);
+        let next_stage = Snapshot { stage_index: Some(2), ..unbounded(Some("a")) };
+        assert_eq!(clock.check(&next_stage, t0 + 3 * hour), None);
+        assert_eq!(clock.check(&next_stage, t0 + 5 * hour), None, "3 h → 5 h on stage 2 is 2 h");
+        // The last timer ended and the oven holds: counts from that moment.
+        let holding = Snapshot { has_end: true, cook_done: true, ..next_stage.clone() };
+        assert_eq!(clock.check(&holding, t0 + 6 * hour), None);
+        assert_eq!(clock.check(&holding, t0 + 10 * hour), Some(4 * hour));
+        // A new cook.
+        let mut clock = SafetyClock::new(Some(4 * hour));
+        clock.check(&unbounded(Some("a")), t0);
+        assert_eq!(clock.check(&unbounded(Some("b")), t0 + 4 * hour), None);
+    }
+
+    #[test]
+    fn safety_clock_keeps_counting_through_offline_and_a_late_cook_id() {
+        let hour = Duration::from_secs(3600);
+        let t0 = Instant::now();
+        let mut clock = SafetyClock::new(Some(4 * hour));
+        clock.check(&unbounded(None), t0);
+        let offline = Snapshot { connected: false, ..unbounded(Some("a")) };
+        assert_eq!(clock.check(&offline, t0 + 2 * hour), None);
+        assert_eq!(clock.check(&unbounded(Some("a")), t0 + 4 * hour), Some(4 * hour));
+    }
+
+    #[test]
+    fn safety_clock_leaves_bounded_and_wet_cooks_alone() {
+        let hour = Duration::from_secs(3600);
+        let t0 = Instant::now();
+        for cook in [
+            Snapshot { has_end: true, ..unbounded(Some("a")) }, // a timer runs
+            Snapshot { wet: true, ..unbounded(Some("a")) },     // sous vide
+            Snapshot { cooking: false, ..unbounded(Some("a")) },
+        ] {
+            let mut clock = SafetyClock::new(Some(4 * hour));
+            assert_eq!(clock.check(&cook, t0), None);
+            assert_eq!(clock.check(&cook, t0 + 30 * hour), None);
+        }
+        // Off.
+        let mut clock = SafetyClock::new(None);
+        clock.check(&unbounded(Some("a")), t0);
+        assert_eq!(clock.check(&unbounded(Some("a")), t0 + 30 * hour), None);
     }
 
     #[test]
