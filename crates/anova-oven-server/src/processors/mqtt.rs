@@ -33,6 +33,10 @@ use milestones::{Milestone, Snapshot};
 /// and how long it has been away.
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
+/// How long a publish may wait for room in the client's queue.
+const PUBLISH_TIMEOUT: Duration = Duration::from_secs(1);
+/// After a safety stop that failed, the next try.
+const SAFETY_RETRY: Duration = Duration::from_secs(5 * 60);
 
 pub struct MqttConfig {
     /// `mqtt://host:1883`; the port defaults to 1883.
@@ -63,7 +67,8 @@ fn safety_limit(value: Option<&str>) -> Option<Duration> {
         }
         None => DEFAULT_SAFETY_LIMIT_HOURS,
     };
-    (hours > 0.0).then(|| Duration::from_secs_f64(hours * 3600.0))
+    let default = Duration::from_secs_f64(DEFAULT_SAFETY_LIMIT_HOURS * 3600.0);
+    (hours > 0.0).then(|| Duration::try_from_secs_f64(hours * 3600.0).unwrap_or(default))
 }
 
 impl MqttConfig {
@@ -280,7 +285,11 @@ struct StageClock {
 impl StageClock {
     /// The running stage's start, in Unix seconds; `None` while idle, and
     /// for a stage that already ran when the App started.
-    fn update(&mut self, status: Option<&OvenStatus>, now: i64) -> Option<i64> {
+    fn update(&mut self, status: Option<&OvenStatus>, connected: bool, now: i64) -> Option<i64> {
+        // Before the oven's first report, the status says nothing yet.
+        if !connected {
+            return self.started_at;
+        }
         let watched = std::mem::replace(&mut self.watched, true);
         let Some(status) = status.filter(|s| s.is_cooking()) else {
             self.key = None;
@@ -311,21 +320,29 @@ struct SafetyClock {
     /// Since when, for which cook, stage and done state. A change of any of
     /// them starts the clock again.
     since: Option<(UnboundedKey, Instant)>,
+    /// When the limit last fired for this clock.
+    fired: Option<Instant>,
 }
 
 type UnboundedKey = (Option<String>, Option<usize>, bool);
 
+/// The same cook, stage and done state. A cook ID that arrives late, or
+/// one frame without it, is the same cook.
+fn same_key(a: &UnboundedKey, b: &UnboundedKey) -> bool {
+    a.1 == b.1 && a.2 == b.2 && (a.0 == b.0 || a.0.is_none() || b.0.is_none())
+}
+
 impl SafetyClock {
     fn new(limit: Option<Duration>) -> Self {
-        SafetyClock { limit, since: None }
+        SafetyClock { limit, since: None, fired: None }
     }
 
     /// The limit, once the cook in `s` has been unbounded that long at
     /// `now`. The clock starts again for a new cook, a new stage, or the end
     /// of the last timer. It keeps running while the oven is offline (the
-    /// oven may still heat), but only an online oven can be stopped. After
-    /// it fires, it fires again one limit later if the cook still runs (the
-    /// stop failed).
+    /// oven may still heat), but only an online oven can be stopped. If the
+    /// cook still runs after the limit fired (the stop failed), it fires
+    /// again every [`SAFETY_RETRY`].
     fn check(&mut self, s: &Snapshot, now: Instant) -> Option<Duration> {
         let limit = self.limit?;
         if !s.connected {
@@ -333,19 +350,25 @@ impl SafetyClock {
         }
         if !s.unbounded() {
             self.since = None;
+            self.fired = None;
             return None;
         }
         let key: UnboundedKey = (s.cook_key.clone(), s.stage_index, s.cook_done);
         let since = match &self.since {
-            // A cook ID that arrives late is the same cook.
-            Some((k, t)) if *k == key || (k.0.is_none() && k.1 == key.1 && k.2 == key.2) => *t,
-            _ => now,
+            Some((k, t)) if same_key(k, &key) => *t,
+            _ => {
+                self.fired = None;
+                now
+            }
         };
+        self.since = Some((key, since));
         if now.duration_since(since) < limit {
-            self.since = Some((key, since));
             return None;
         }
-        self.since = Some((key, now));
+        if self.fired.is_some_and(|f| now.duration_since(f) < SAFETY_RETRY) {
+            return None;
+        }
+        self.fired = Some(now);
         Some(limit)
     }
 }
@@ -383,13 +406,19 @@ impl EndAnchor {
 }
 
 impl Processor {
+    /// Publish, but wait at most [`PUBLISH_TIMEOUT`]. While the broker is
+    /// away, the client's queue fills and a publish would wait until it
+    /// returns; the safety limit and Auto stop run after the publishes, so
+    /// they must not wait with it. A reconnect publishes every retained
+    /// topic again (`on_connected`).
     async fn publish(&self, topic: String, retain: bool, payload: impl Into<Vec<u8>>) {
-        if let Err(e) = self
+        let send = self
             .client
-            .publish(topic.clone(), QoS::AtLeastOnce, retain, payload)
-            .await
-        {
-            warn!(topic, error = %e, "[mqtt] publish failed");
+            .publish(topic.clone(), QoS::AtLeastOnce, retain, payload);
+        match tokio::time::timeout(PUBLISH_TIMEOUT, send).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => warn!(topic, error = %e, "[mqtt] publish failed"),
+            Err(_) => debug!(topic, "[mqtt] publish dropped: the broker is away"),
         }
     }
 
@@ -590,7 +619,9 @@ impl Processor {
             status.as_ref().map_or(0, |s| s.timer_total_secs),
             jiff::Timestamp::now().as_second(),
         );
-        let stage_started_at = self.stage_clock.update(status.as_ref(), jiff::Timestamp::now().as_second());
+        let stage_started_at =
+            self.stage_clock
+                .update(status.as_ref(), connected, jiff::Timestamp::now().as_second());
         let state = state_json(status.as_ref(), model.current_cook.as_ref(), connected, ends_at, stage_started_at)
             .to_string();
         if force || self.last_state.as_deref() != Some(state.as_str()) {
@@ -620,8 +651,11 @@ impl Processor {
         }
 
         let mut done = false;
+        let had_baseline = self.last_snapshot.is_some();
         if let Some(prev) = self.last_snapshot.take() {
+            let mut stopped = false;
             for milestone in milestones::milestones(&prev, &snapshot) {
+                stopped |= milestone == Milestone::CookStopped;
                 done |= milestone == Milestone::CookDone;
                 if milestone == Milestone::CookStarted {
                     self.started_by = self.pending_started_by.take();
@@ -640,9 +674,23 @@ impl Processor {
                 }
                 self.event(milestone, payload).await;
             }
+            // A cook that held after its last timer ends without
+            // `cook_stopped` (it said `cook_done`). When the server stopped
+            // it, say so.
+            if prev.cooking && !snapshot.cooking && snapshot.connected && !stopped {
+                if let Some(reason) = self.stop_reason.take() {
+                    let mut payload = prev.payload(Milestone::CookStopped.as_str());
+                    payload["reason"] = reason;
+                    self.event(Milestone::CookStopped, payload).await;
+                }
+            }
         }
         let unbounded_too_long = self.safety.check(&snapshot, Instant::now());
-        self.last_snapshot = Some(snapshot);
+        // The baseline is the oven's first report. Before it, the status says
+        // idle, and a restart mid-cook would announce the cook again.
+        if had_baseline || (connected && status.is_some()) {
+            self.last_snapshot = Some(snapshot);
+        }
         if done && self.auto_stop {
             self.stop_cook(sources, "auto_stop").await;
         } else if let Some(limit) = unbounded_too_long {
@@ -651,7 +699,10 @@ impl Processor {
                 "kind": "safety_limit",
                 "hours": limit.as_secs_f64() / 3600.0,
             }));
-            self.stop_cook(sources, "safety_limit").await;
+            if !self.stop_cook(sources, "safety_limit").await {
+                // The next stop of this cook is not a safety stop.
+                self.stop_reason = None;
+            }
         }
     }
 
@@ -664,7 +715,9 @@ impl Processor {
     /// Anova's cloud stops the cook. With Auto stop on, the server does. The
     /// safety limit stops a dry cook that nothing ends. `why` names the
     /// command in a `command_failed` event.
-    async fn stop_cook(&self, sources: &Sources, why: &str) {
+    /// Whether the oven took the stop. A failure is a `command_failed`
+    /// event; the phones get it for `auto_stop` and `safety_limit`.
+    async fn stop_cook(&self, sources: &Sources, why: &str) -> bool {
         info!(why, "[mqtt] stopping the cook");
         let (reply_tx, reply_rx) = oneshot::channel();
         if sources
@@ -673,14 +726,19 @@ impl Processor {
             .await
             .is_err()
         {
-            return;
+            self.command_failed(why, "the state machine is gone").await;
+            return false;
         }
         match reply_rx.await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => self.command_failed(why, &e.to_string()).await,
+            Ok(Ok(())) => true,
+            Ok(Err(e)) => {
+                self.command_failed(why, &e.to_string()).await;
+                false
+            }
             Err(_) => {
                 self.command_failed(why, "state machine dropped the reply")
-                    .await
+                    .await;
+                false
             }
         }
     }
@@ -1096,9 +1154,9 @@ mod tests {
         assert_eq!(clock.check(&cook, t0), None);
         assert_eq!(clock.check(&cook, t0 + 3 * hour), None);
         assert_eq!(clock.check(&cook, t0 + 4 * hour), Some(4 * hour));
-        // The stop failed: once more after another limit, not at every poll.
+        // The stop failed: again after SAFETY_RETRY, not at every poll.
         assert_eq!(clock.check(&cook, t0 + 4 * hour + Duration::from_secs(5)), None);
-        assert_eq!(clock.check(&cook, t0 + 8 * hour), Some(4 * hour));
+        assert_eq!(clock.check(&cook, t0 + 4 * hour + SAFETY_RETRY), Some(4 * hour));
     }
 
     #[test]
@@ -1129,6 +1187,21 @@ mod tests {
         let offline = Snapshot { connected: false, ..unbounded(Some("a")) };
         assert_eq!(clock.check(&offline, t0 + 2 * hour), None);
         assert_eq!(clock.check(&unbounded(Some("a")), t0 + 4 * hour), Some(4 * hour));
+    }
+
+    #[test]
+    fn safety_clock_keeps_counting_when_a_frame_lacks_the_cook_id() {
+        let hour = Duration::from_secs(3600);
+        let t0 = Instant::now();
+        let mut clock = SafetyClock::new(Some(4 * hour));
+        clock.check(&unbounded(Some("a")), t0);
+        assert_eq!(clock.check(&unbounded(None), t0 + hour), None);
+        assert_eq!(clock.check(&unbounded(Some("a")), t0 + 4 * hour), Some(4 * hour));
+    }
+
+    #[test]
+    fn safety_limit_hours_never_panic() {
+        assert_eq!(safety_limit(Some("1e300")), Some(Duration::from_secs(4 * 3600)));
     }
 
     #[test]
@@ -1173,24 +1246,27 @@ mod tests {
     #[test]
     fn the_stage_clock_starts_with_each_stage_it_sees() {
         let mut clock = StageClock::default();
-        assert_eq!(clock.update(Some(&oven("idle", None, None)), 100), None);
+        assert_eq!(clock.update(Some(&oven("idle", None, None)), true, 100), None);
         // The cook starts; its ID arrives a moment later.
-        assert_eq!(clock.update(Some(&oven("cook", None, Some(0))), 110), Some(110));
-        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(0))), 115), Some(110));
+        assert_eq!(clock.update(Some(&oven("cook", None, Some(0))), true, 110), Some(110));
+        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(0))), true, 115), Some(110));
         // The preheat ends: stage 2 starts.
-        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(1))), 400), Some(400));
-        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(1))), 900), Some(400));
-        assert_eq!(clock.update(Some(&oven("idle", None, None)), 950), None);
+        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(1))), true, 400), Some(400));
+        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(1))), true, 900), Some(400));
+        assert_eq!(clock.update(Some(&oven("idle", None, None)), true, 950), None);
     }
 
     #[test]
     fn the_stage_clock_does_not_guess_a_start_it_did_not_see() {
         let mut clock = StageClock::default();
+        // Before the oven's first report: nothing is known or decided.
+        assert_eq!(clock.update(None, false, 90), None);
+        assert_eq!(clock.update(Some(&oven("idle", None, None)), false, 95), None);
         // The App starts during a cook: the stage's start is unknown.
-        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(1))), 100), None);
-        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(1))), 200), None);
+        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(1))), true, 100), None);
+        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(1))), true, 200), None);
         // The next stage starts while it watches.
-        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(2))), 300), Some(300));
+        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(2))), true, 300), Some(300));
     }
 
     #[test]

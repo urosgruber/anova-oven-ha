@@ -14,6 +14,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -118,6 +119,9 @@ class NotifyMessages(unittest.TestCase):
         cases = [
             ({"event_type": "temp_reached", "target_c": 200.0}, "The oven is at 200 °C."),
             ({"event_type": "temp_reached", "target_c": 56.5, "wet": True}, "The oven is at 56.5 °C."),
+            ({"event_type": "temp_reached", "target_c": 204.4, "unit": "F"}, "The oven is at 400 °F."),
+            ({"event_type": "command_failed", "command": "safety_limit", "reason": "timeout"},
+             "The App could not stop the oven. Stop it on the oven. (timeout)"),
             ({"event_type": "water_empty"}, "The water tank is empty. Fill it to keep the steam going."),
             ({"event_type": "cook_stopped"}, "The cook stopped."),
             ({"event_type": "cook_stopped", "reason": {"kind": "safety_limit", "hours": 4.0}},
@@ -128,6 +132,9 @@ class NotifyMessages(unittest.TestCase):
         for attributes, text in cases:
             with self.subTest(text=text):
                 self.assertEqual(notify.message(hass, attributes)[1], text)
+
+    def test_other_failed_commands_stay_quiet(self):
+        self.assertIsNone(notify.message(FakeHass(), {"event_type": "command_failed", "command": "lamp"}))
 
     def test_timer_done_says_whether_the_oven_stopped(self):
         done = {"event_type": "cook_done"}
@@ -198,8 +205,8 @@ class RegisterCard(unittest.TestCase):
             register_card.SOURCE = source
             register_card.TARGET_DIR = os.path.join(tmp, "www", "anova-oven")
             register_card.websocket.create_connection = lambda *a, **k: sock
-            os.environ.update(SUPERVISOR_TOKEN="token", CARD_VERSION="1.2.3")
-            code = register_card.main()
+            with mock.patch.dict(os.environ, SUPERVISOR_TOKEN="token", CARD_VERSION="1.2.3"):
+                code = register_card.main()
             copied = os.path.exists(os.path.join(register_card.TARGET_DIR, "anova-oven-card.js"))
         writes = [r for r in sock.requests if r["type"].startswith("lovelace/resources/")]
         return code, copied, writes

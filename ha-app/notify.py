@@ -109,8 +109,15 @@ def message(hass, a):
         target = a.get("target_c")
         if target is None:
             return title, "The oven is at temperature."
+        # The oven's display unit, as in the step texts.
+        unit = "°F" if a.get("unit") == "F" else "°C"
+        if unit == "°F":
+            target = target * 9 / 5 + 32
         degrees = f"{target:.1f}" if a.get("wet") else f"{round(target)}"
-        return title, f"The oven is at {degrees} °C."
+        return title, f"The oven is at {degrees} {unit}."
+    if kind == "command_failed" and a.get("command") in STOPS:
+        return title, ("The App could not stop the oven. Stop it on the oven. "
+                       f"({a.get('reason') or 'no reason'})")
     if kind == "water_empty":
         return title, "The water tank is empty. Fill it to keep the steam going."
     if kind == "cook_stopped":
@@ -125,9 +132,11 @@ def message(hass, a):
     return None
 
 
-# Events that never make a notification. Every event type the server
-# announces is either here or has a text in message(); a test checks it.
+# Events that make no notification. Every event type the server announces
+# is either here or has a text in message(); a test checks it. One
+# exception: a failed stop (Auto stop or the safety limit) does notify.
 QUIET = {"cook_started", "command_failed"}
+STOPS = {"auto_stop", "safety_limit"}
 
 
 def handle(hass, msg):
