@@ -18,16 +18,28 @@
  *   title: Oven                 # optional
  *   prefix: anova_oven          # optional, the entity ID prefix
  *   mqtt_prefix: anova/oven     # optional, the server's MQTT topic prefix
+ *   power_switch: switch.x      # optional, the smart plug the oven hangs on
+ *   power_sensor: sensor.x      # optional, that plug's power in W
+ *   power_idle_w: 20            # optional, the most an idle, cool oven draws
+ *
+ * Power: the card never cuts power to a hot oven, because the oven cools
+ * itself with its fan. "Turn off" only when the oven is idle and below
+ * 50 °C; "Restart power" (for Wi-Fi) only when the oven is offline and the
+ * plug reads no more than power_idle_w.
  *
  * The HA app installs this file and registers it as a dashboard resource.
  * Start publishes {"stages": [...]} to <mqtt_prefix>/cmd/start with the
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.11.3";
+const CARD_VERSION = "0.12.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
+// Power off only below this temperature: above it, the fan still cools.
+const POWER_OFF_MAX_C = 50;
+// Restart power: off for this long, then on again.
+const RESTART_OFF_MS = 10000;
 const SETUP_KEY = "anova-oven-card:setup";
 // A cool-down stage: the rear element with a 25 °C target. The heaters stay
 // off while the oven is hotter, the fan runs, and the vent is open.
@@ -77,7 +89,9 @@ class AnovaOvenCard extends HTMLElement {
   }
 
   setConfig(config) {
-    this._config = { prefix: "anova_oven", mqtt_prefix: "anova/oven", ...config };
+    this._config = { prefix: "anova_oven", mqtt_prefix: "anova/oven", power_idle_w: 20, ...config };
+    this._watch = [...WATCHED.map((w) => this._id(...w.split("."))),
+      this._config.power_switch, this._config.power_sensor].filter(Boolean);
     this._stopArmedUntil = 0;
     this._lampPending = null;
     this._panel = null;
@@ -105,10 +119,7 @@ class AnovaOvenCard extends HTMLElement {
     this._hass = hass;
     // HA sets hass on every state change in the whole instance. HA replaces
     // a state object when it changes, so comparing references is enough.
-    const changed = !before || WATCHED.some((w) => {
-      const id = this._id(...w.split("."));
-      return before.states[id] !== hass.states[id];
-    });
+    const changed = !before || this._watch.some((id) => before.states[id] !== hass.states[id]);
     if (!changed) return;
     if (this._lampPending) {
       const lamp = this._on("light", "lamp");
@@ -350,14 +361,32 @@ class AnovaOvenCard extends HTMLElement {
   // --- View model ---------------------------------------------------------
 
   _model() {
-    const connected = this._on("binary_sensor", "connected");
+    const link = this._state("binary_sensor", "connected");
+    // The app runs when its Connected sensor exists and has a state.
+    const appUp = !!link && link.state !== "unavailable" && link.state !== "unknown";
+    const connected = appUp && link.state === "on";
+    // While the oven is offline, the Connected sensor keeps its last state.
+    const last = (link && link.attributes) || {};
+    const plug = this._config.power_switch ? this._hass.states[this._config.power_switch] : null;
+    const plugState = plug && (plug.state === "on" || plug.state === "off") ? plug.state : null;
+    const watt = this._config.power_sensor ? this._hass.states[this._config.power_sensor] : null;
+    const watts = watt && Number.isFinite(Number(watt.state)) && watt.state !== "" ? Number(watt.state) : null;
     const cooking = connected && this._on("binary_sensor", "cooking");
     const lastEvent = (this._state("event", "cook") || {}).attributes?.event_type;
     const endsAt = this._value("sensor", "stage_ends_at");
     const timerMin = this._number("number", "set_timer");
     return {
+      appUp,
       connected,
       cooking,
+      offlineSince: !connected && link && link.last_changed ? Date.parse(link.last_changed) : null,
+      wasCooking: appUp && !connected && !!last.mode && !["idle", "unknown"].includes(last.mode),
+      lastTemp: Number.isFinite(last.temperature_c) ? last.temperature_c : null,
+      lastTarget: Number.isFinite(last.target_temperature_c) ? last.target_temperature_c : null,
+      lastRecipe: last.recipe_title || null,
+      plug: plugState,
+      hasPlug: !!this._config.power_switch,
+      watts,
       phase: this._value("sensor", "mode") || "Unknown",
       done: cooking && lastEvent === "cook_done",
       temp: this._number("sensor", "temperature"),
@@ -409,13 +438,13 @@ class AnovaOvenCard extends HTMLElement {
           <div class="shape"><ha-icon icon="${live ? "mdi:stove" : "mdi:toaster-oven"}"></ha-icon></div>
           <div class="info">
             <div class="primary">${esc(this._config.title || "Oven")}</div>
-            <div class="secondary ${warning ? "warn" : ""}" id="secondary">${warning ? esc(warning) : secondary(m)}</div>
+            <div class="secondary ${warning ? "warn" : ""}" id="secondary">${warning ? esc(warning + powerText(m)) : secondary(m) + esc(powerText(m))}</div>
           </div>
-          <div class="icon-state ${m.door ? "warn" : ""}" title="${m.door ? "Door open" : "Door closed"}">
+          <div class="icon-state ${off ? "unknown" : m.door ? "warn" : ""}" title="${off ? "Door: unknown (offline)" : m.door ? "Door open" : "Door closed"}">
             <ha-icon icon="${m.door ? "mdi:door-open" : "mdi:door-closed"}"></ha-icon>
           </div>
-          <div class="icon-state probe ${m.probe !== null ? "in" : ""}"
-            title="${m.probe !== null ? `Probe plugged in: ${Math.round(m.probe)} °C` : "Probe not plugged in"}">
+          <div class="icon-state probe ${off ? "unknown" : m.probe !== null ? "in" : ""}"
+            title="${off ? "Probe: unknown (offline)" : m.probe !== null ? `Probe plugged in: ${Math.round(m.probe)} °C` : "Probe not plugged in"}">
             <ha-icon icon="mdi:thermometer-probe"></ha-icon>
           </div>
           <button class="icon-state lamp ${lampShown ? "on" : ""} ${this._lampPending ? "pending" : ""}" id="lamp"
@@ -436,7 +465,9 @@ class AnovaOvenCard extends HTMLElement {
             <div class="feature progress" title="${esc(m.stageDescription || "")}">
               <div class="progress-fill" id="bar" style="width:${pct(progress(m))}"></div>
               <span class="progress-text" id="bar-label">${barLabel(m)}</span>
-            </div>` : select("mode", MODES.map((md) => ({ key: md.key, label: md.label, html: modeIcon(md.key) })), s.mode, off)}
+            </div>` : m.wasCooking ? `
+            <div class="feature notice" id="was-cooking">${esc(wasCookingText(m))}</div>`
+            : select("mode", MODES.map((md) => ({ key: md.key, label: md.label, html: modeIcon(md.key) })), s.mode, off)}
 
           <div class="pair wide">
             ${slider("temp", live ? (m.temp === null ? 0 : (m.temp - tlo) / (thi - tlo)) : tValue === null ? 0 : (tValue - tlo) / (thi - tlo),
@@ -478,8 +509,10 @@ class AnovaOvenCard extends HTMLElement {
                   <ha-icon icon="${s.waits ? "mdi:hand-back-right-outline" : "mdi:arrow-right-bold-outline"}"></ha-icon>
                   <span>${s.waits ? "Wait" : "Auto"}</span>
                 </button>`}
+              ${off && m.plug === "off" ? `
+              <button class="feature action start" id="power-on"><ha-icon icon="mdi:power"></ha-icon>Turn on</button>` : `
               <button class="feature action start" id="start" ${off || needsProbe ? "disabled" : ""}>
-                <ha-icon icon="mdi:play"></ha-icon>${startLabel(s)}</button>`}
+                <ha-icon icon="mdi:play"></ha-icon>${startLabel(s)}</button>`}`}
           </div>
           `}
         </div>
@@ -587,6 +620,7 @@ class AnovaOvenCard extends HTMLElement {
               the handle.</span>
           </div>
         </div>
+        ${m.hasPlug ? this._powerItem(m) : ""}
         <div class="item">
           <div class="item-text">
             <b>Water tank <span class="tag ${m.waterEmpty ? "warn" : ""}">${m.waterEmpty ? "empty" : "OK"}</span></b>
@@ -594,6 +628,35 @@ class AnovaOvenCard extends HTMLElement {
           </div>
         </div>
       </div>`;
+  }
+
+  _powerItem(m) {
+    const p = powerAction(m, this._config.power_idle_w);
+    const armed = p.action && this._armed && this._armed.key === `power:${p.action}` && Date.now() < this._armed.until;
+    const tag = m.plug === null ? "unknown" : `${m.plug}${m.watts !== null ? ` · ${fmtWatts(m.watts)}` : ""}`;
+    const label = { on: "Turn on", off: "Turn off", restart: "Restart" }[p.action];
+    return `
+        <div class="item">
+          <div class="item-text">
+            <b>Power <span class="tag ${m.plug === "off" ? "warn" : ""}">${esc(tag)}</span></b>
+            <span>${esc(p.why)}</span>
+          </div>
+          ${p.action ? `<button class="feature action ${p.action === "on" ? "start" : "stop"} item-btn ${armed ? "armed" : ""}" id="power-${p.action}">
+            <ha-icon icon="mdi:${p.action === "restart" ? "restart" : "power"}"></ha-icon>${armed ? "Tap again" : label}</button>` : ""}
+        </div>`;
+  }
+
+  // Turn on is one tap. Turn off and Restart need a second tap.
+  _power(action) {
+    const id = this._config.power_switch;
+    if (!id) return;
+    if (action === "on") { this._call("switch", "turn_on", { entity_id: id }); return; }
+    this._confirm(`power:${action}`, () => {
+      // Check again: the oven may have started or heated since the render.
+      if (powerAction(this._model(), this._config.power_idle_w).action !== action) return;
+      this._call("switch", "turn_off", { entity_id: id });
+      if (action === "restart") setTimeout(() => this._call("switch", "turn_on", { entity_id: id }), RESTART_OFF_MS);
+    });
   }
 
   // Heating element prep, from the oven's manual, fully automatic: rear
@@ -666,6 +729,9 @@ class AnovaOvenCard extends HTMLElement {
     });
     if ($("tools-close")) $("tools-close").onclick = () => { this._panel = null; this._render(); };
     if ($("prep")) $("prep").onclick = () => this._startPrep();
+    for (const action of ["on", "off", "restart"]) {
+      if ($(`power-${action}`)) $(`power-${action}`).onclick = () => this._power(action);
+    }
     root.querySelectorAll("[data-select]").forEach((b) => {
       b.onclick = () => this._update({ [b.dataset.select]: b.dataset.key });
     });
@@ -759,7 +825,7 @@ class AnovaOvenCard extends HTMLElement {
     if (!this.shadowRoot || !this._hass || this._holding) return;
     const m = this._model();
     const $ = (id) => this.shadowRoot.getElementById(id);
-    if (!warningText(m) && $("secondary")) $("secondary").innerHTML = secondary(m);
+    if (!warningText(m) && $("secondary")) $("secondary").innerHTML = secondary(m) + esc(powerText(m));
     if (m.cooking) {
       if ($("bar")) $("bar").style.width = pct(progress(m));
       if ($("bar-label")) $("bar-label").innerHTML = barLabel(m);
@@ -1018,7 +1084,10 @@ function fmtTemp(v, unit = "°") {
 }
 
 function warningText(m) {
-  if (!m.connected) return "Offline: check the oven's power and Wi-Fi";
+  if (!m.appUp) return "The Anova app in Home Assistant is not running";
+  if (!m.connected && m.plug === "off") return "Power off";
+  if (!m.connected && m.wasCooking && m.offlineSince) return `Offline since ${hhmm(m.offlineSince)}`;
+  if (!m.connected) return m.plug === "on" ? "Offline: check the oven's Wi-Fi" : "Offline: check the oven's power and Wi-Fi";
   if (m.waterEmpty) return "Water tank empty";
   if (m.cooking && m.door) return "Door open";
   if (m.descale) return "Descale needed";
@@ -1050,6 +1119,41 @@ function secondary(m) {
   const probe = m.probe !== null ? ` · probe ${Math.round(m.probe)} °C` : "";
   if (!m.cooking) return `Idle · ${temp}${probe}`;
   return esc(`${m.recipe || "Cooking"}${probe}`);
+}
+
+// What the power button may do now, and why. The rule: never cut power to
+// a hot oven, because the oven cools itself with its fan.
+function powerAction(m, idleW) {
+  if (m.plug === null) return { action: null, why: "The plug does not report its state." };
+  if (m.plug === "off") return { action: "on", why: "The oven has no power." };
+  if (m.connected) {
+    if (m.cooking) return { action: null, why: "Stop the cook first." };
+    if (m.temp === null || m.temp >= POWER_OFF_MAX_C) {
+      return { action: null, why: `Turn off works below ${POWER_OFF_MAX_C} °C: the fan still cools the oven.` };
+    }
+    return { action: "off", why: "The oven is idle and cool." };
+  }
+  if (m.watts === null) return { action: null, why: "Offline. Without a power reading, the card cannot tell if the oven still runs." };
+  if (m.watts > idleW) return { action: null, why: `Offline, but it draws ${fmtWatts(m.watts)}: the oven may still run.` };
+  return { action: "restart", why: "Offline and idle: off for 10 s, then on. This often fixes the Wi-Fi." };
+}
+
+function powerText(m) {
+  return m.watts === null ? "" : ` · ${fmtWatts(m.watts)}`;
+}
+
+function fmtWatts(w) {
+  return w >= 1000 ? `${(w / 1000).toFixed(1)} kW` : `${Math.round(w)} W`;
+}
+
+function hhmm(t) {
+  const d = new Date(t);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function wasCookingText(m) {
+  const temp = m.lastTarget !== null ? ` at ${Math.round(m.lastTarget)} °C` : "";
+  return `Was cooking${temp} · it may still run`;
 }
 
 // "1 of 3" from the Stage sensor.
@@ -1265,6 +1369,10 @@ const STYLE = `
 
   /* Probe status: orange while plugged in. */
   .icon-state.probe { opacity: .4; }
+  .icon-state.unknown, .icon-state.probe.unknown { opacity: .25; color: var(--secondary-text-color); }
+  .notice { display: flex; align-items: center; justify-content: center; padding: 0 12px; font-size: 14px; font-weight: 500;
+    background: rgba(var(--rgb-warning-color, 230, 149, 0), .18); color: var(--primary-text-color);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .icon-state.probe.in { opacity: 1; color: var(--primary-text-color); background: rgba(var(--rgb-primary-text-color, 33, 33, 33), .1); }
   .icon-state.tools { background: var(--track); }
   .icon-state.tools { position: relative; }

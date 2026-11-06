@@ -195,3 +195,55 @@ function programFromStagesForTest(card) {
   check("short program title", programTitleOf(c7) === "180 → 220 °C · 2 steps");
   function programTitleOf(card) { card._start(); return JSON.parse(card._hass.calls.at(-1).data.payload).title; }
 }
+
+// --- 0.12: power plug, offline states ---
+{
+  const PLUG = { power_switch: "switch.oven_plug", power_sensor: "sensor.oven_plug_power" };
+  const withPlug = (over, plug, watts, link) => {
+    const h = hass(over);
+    h.states["switch.oven_plug"] = st(plug);
+    h.states["sensor.oven_plug_power"] = st(String(watts));
+    if (link) Object.assign(h.states[`binary_sensor.${P}_connected`], link);
+    return h;
+  };
+  const card = (h) => { const c = new Card(); store["anova-oven-card:setup"] = null; c.setConfig(PLUG); c.hass = h; return c; };
+  const tools = (c) => { c._panel = "maintenance"; c._render(); return c.shadowRoot.innerHTML; };
+
+  let c = card(withPlug({}, "on", 2));
+  check("idle status line shows the power draw", /id="secondary">Idle · 23 °C · 2 W</.test(c.shadowRoot.innerHTML));
+  check("idle and cool: Turn off in the cog panel", tools(c).includes('id="power-off"'));
+  c._power("off");
+  check("Turn off needs a second tap", !c._hass.calls.some((x) => x.s === "turn_off"));
+  c._power("off");
+  check("the second tap turns the plug off", c._hass.calls.at(-1).s === "turn_off" && c._hass.calls.at(-1).data.entity_id === "switch.oven_plug");
+
+  c = card(withPlug({ "sensor.temperature": "120" }, "on", 40));
+  check("hot oven: no Turn off", !tools(c).includes('id="power-') && tools(c).includes("below 50 °C"));
+  c = card(withPlug({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.temperature": "30" }, "on", 1900));
+  check("cooking: no power button, kW in the status line", !tools(c).includes('id="power-') && c.shadowRoot.innerHTML.includes("1.9 kW"));
+
+  c = card(withPlug({ "binary_sensor.connected": "off" }, "off", 0));
+  let o = c.shadowRoot.innerHTML;
+  check("plug off: Power off, and Turn on in place of Bake", o.includes(">Power off · 0 W<") && o.includes('id="power-on"') && !o.includes('id="start"'));
+  c._power("on");
+  check("Turn on is one tap", c._hass.calls.at(-1).s === "turn_on");
+
+  c = card(withPlug({ "binary_sensor.connected": "off" }, "on", 3));
+  o = c.shadowRoot.innerHTML;
+  check("offline, plug on: check the Wi-Fi; door and probe unknown", o.includes("check the oven&#39;s Wi-Fi") || o.includes("check the oven's Wi-Fi"));
+  check("offline: header icons show unknown", (o.match(/class="icon-state[^"]*unknown/g) || []).length === 2);
+  check("offline and idle draw: Restart in the cog panel", tools(c).includes('id="power-restart"'));
+  c = card(withPlug({ "binary_sensor.connected": "off" }, "on", 300));
+  check("offline but drawing 300 W: no Restart", !tools(c).includes('id="power-restart"') && tools(c).includes("may still run"));
+
+  c = card(withPlug({ "binary_sensor.connected": "off" }, "on", 300, {
+    last_changed: "2026-11-06T11:40:00Z", attributes: { mode: "cook", temperature_c: 171, target_temperature_c: 176, recipe_title: "Pizza" } }));
+  o = c.shadowRoot.innerHTML;
+  check("offline after a cook: Offline since, and the notice row", o.includes("Offline since") && o.includes("Was cooking at 176 °C · it may still run") && !o.includes('data-select="mode"'));
+
+  const h = hass(); delete h.states[`binary_sensor.${P}_connected`];
+  c = card(h);
+  check("app not running: says so", c.shadowRoot.innerHTML.includes("The Anova app in Home Assistant is not running"));
+  c = new Card(); c.setConfig({}); c.hass = withPlug({}, "on", 2);
+  check("no plug configured: no power item, no watts", !tools(c).includes("Power <span") && !c.shadowRoot.innerHTML.includes(" W<"));
+}

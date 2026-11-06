@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.12.0
+
+- Smart plug support (optional). Add `power_switch` and `power_sensor` to
+  the card's settings (see the documentation):
+  - The status line shows the power draw, for example "Idle · 23 °C · 2 W".
+  - "Turn on" replaces Bake when the plug is off.
+  - The cog panel can turn the plug off when the oven is idle and below
+    50 °C, and restart it when the oven is offline and draws almost
+    nothing. The card never cuts power to a hot oven.
+- Offline after a cook: the card says "Offline since 12:40" and "Was
+  cooking at 176 °C · it may still run". The oven keeps cooking without a
+  connection, so the card no longer looks idle.
+- Offline: the door and probe icons are greyed out, because the card
+  does not know their state.
+- When the App itself is not running, the card says so, and no longer
+  tells you to check the oven.
+
 ## 0.11.3
 
 - The target mark in the temperature bar stays fully visible at the ends,
