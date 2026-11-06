@@ -53,13 +53,15 @@ door, light) it always shows the same six rows, so it never changes size:
    about 394 px wide or more, steam sits in this row, next to the timer.
 5. Preheat and Bake (or Cook, with sous vide on). With Preheat on, the
    oven heats up first, and step 1 and its timer start at temperature.
-   For step 2 and later, the left button chooses "Auto start" or
-   "Wait for me" (the step waits until you tap Next stage).
+   For step 2 and later, the left button chooses "Auto" or "Wait"
+   (the step waits until you tap Start step N).
    During a cook: Next stage when a stage waits for you, and Stop (tap
    twice).
 
-During a cook, the temperature slider and - and + change the running
-cook's temperature, and - and + change a running timer.
+During a cook, the temperature bar shows the oven's temperature (orange
+fill) and the target (white mark); drag the mark or use - and + to change
+the target. - and + also change a running timer. "Skip to step N" ends
+the current step early; "Start step N" starts a step that waits for you.
 
 The header shows the door, the probe (orange while plugged in; its
 temperature is in the status line), the light, and a cog. An amber dot
@@ -73,9 +75,9 @@ app's recipes; the Recipes sensor carries them with their steps.
 
 The cog opens the maintenance panel in the same space:
 
-- Heating element prep (from the oven's manual): rear 176 °C for 15 min,
-  then top and bottom 176 °C for 15 min. Between them, let the oven cool
-  and air it, then tap Next stage. Tap Stop at the end.
+- Heating element prep (from the oven's manual), fully automatic: rear
+  176 °C for 15 min, a 15-minute cool-down (fan only, vent open), top and
+  bottom 176 °C for 15 min, then a cool-down until you tap Stop.
 - Descale: shows if a descale is needed. Start it on the oven: fill the
   tank with descaler and water, press the descale symbol, then Start. The
   card cannot start a descale yet; the command is untested.
