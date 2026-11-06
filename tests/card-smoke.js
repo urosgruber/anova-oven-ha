@@ -211,14 +211,14 @@ function programFromStagesForTest(card) {
 
   let c = card(withPlug({}, "on", 2));
   check("idle status line shows the power draw", /id="secondary">Idle · 23 °C · 2 W</.test(c.shadowRoot.innerHTML));
-  check("idle and cool: Turn off in the cog panel", tools(c).includes('id="power-off"'));
+  check("idle: Turn off in the cog panel", tools(c).includes('id="power-off"'));
   c._power("off");
   check("Turn off needs a second tap", !c._hass.calls.some((x) => x.s === "turn_off"));
   c._power("off");
   check("the second tap turns the plug off", c._hass.calls.at(-1).s === "turn_off" && c._hass.calls.at(-1).data.entity_id === "switch.oven_plug");
 
-  c = card(withPlug({ "sensor.temperature": "120" }, "on", 40));
-  check("hot oven: no Turn off", !tools(c).includes('id="power-') && tools(c).includes("below 50 °C"));
+  c = card(withPlug({ "sensor.temperature": "120" }, "on", 2));
+  check("idle but hot: Turn off too", tools(c).includes('id="power-off"'));
   c = card(withPlug({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.temperature": "30" }, "on", 1900));
   check("cooking: no power button, kW in the status line", !tools(c).includes('id="power-') && c.shadowRoot.innerHTML.includes("1.9 kW"));
 
