@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.1
+
+- During a cook, every phone and browser shows the stage temperatures in
+  the step chips. Before, only the device that started the cook showed
+  them. The app now sends the running cook's stages to Home Assistant, as
+  attributes of the "Current recipe" sensor.
+
 ## 0.11.0
 
 - Heating element prep runs by itself: rear 176 °C for 15 min, a
