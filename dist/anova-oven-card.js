@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.12.1";
+const CARD_VERSION = "0.12.2";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -603,26 +603,20 @@ class AnovaOvenCard extends HTMLElement {
           <span>Maintenance</span>
           <button class="icon-state" id="tools-close" title="Close"><ha-icon icon="mdi:close"></ha-icon></button>
         </div>
-        <div class="item">
+        <div class="item" title="Runs by itself: rear 176 °C for 15 min, a 15-minute cool-down with the vent open, top and bottom 176 °C for 15 min, then a cool-down until you tap Stop.">
           <div class="item-text">
             <b>Heating element prep</b>
-            <span>Runs by itself: rear 176 °C for 15 min, a 15-minute cool-down with the vent open, top and
-              bottom 176 °C for 15 min, then a cool-down until you tap Stop.</span>
+            <span>45 min · ends with a cool-down until Stop</span>
           </div>
           <button class="feature action start item-btn" id="prep" ${busy ? "disabled" : ""}><ha-icon icon="mdi:play"></ha-icon>Start</button>
         </div>
-        <div class="item">
-          <div class="item-text">
-            <b>Descale <span class="tag ${m.descale ? "warn" : ""}">${m.descale ? "needed" : "not needed"}</span></b>
-            <span>Start it on the oven: fill the tank with descaler and water, press the descale symbol, then Start on
-              the handle.</span>
-          </div>
-        </div>
         ${m.hasPlug ? this._powerItem(m) : ""}
-        <div class="item">
+        <div class="item" ${m.descale ? `title="Fill the tank with descaler and water, press the descale symbol on the oven, then Start on the handle."` : ""}>
           <div class="item-text">
-            <b>Water tank <span class="tag ${m.waterEmpty ? "warn" : ""}">${m.waterEmpty ? "empty" : "OK"}</span></b>
-            <span>Steam and sous vide need water.</span>
+            <b>Descale <span class="tag ${m.descale ? "warn" : ""}">${m.descale ? "needed" : "not needed"}</span>
+              <span class="gap"></span>Water <span class="tag ${m.waterEmpty ? "warn" : ""}">${m.waterEmpty ? "empty" : "OK"}</span></b>
+            ${m.descale ? "<span>Start it on the oven: the descale symbol, then Start</span>"
+              : m.waterEmpty ? "<span>Steam and sous vide need water</span>" : ""}
           </div>
         </div>
       </div>`;
@@ -637,7 +631,7 @@ class AnovaOvenCard extends HTMLElement {
         <div class="item">
           <div class="item-text">
             <b>Power <span class="tag ${m.plug === "off" ? "warn" : ""}">${esc(tag)}</span></b>
-            <span>${esc(p.why)}</span>
+            ${p.action && p.action !== "restart" ? "" : `<span title="${esc(p.why)}">${esc(p.why)}</span>`}
           </div>
           ${p.action ? `<button class="feature action ${p.action === "on" ? "start" : "stop"} item-btn ${armed ? "armed" : ""}" id="power-${p.action}">
             <ha-icon icon="mdi:${p.action === "restart" ? "restart" : "power"}"></ha-icon>${armed ? "Tap again" : label}</button>` : ""}
@@ -1407,7 +1401,9 @@ const STYLE = `
   .item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: var(--r); background: var(--track); }
   .item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .item-text b { font-size: 14px; font-weight: 500; color: var(--primary-text-color); }
-  .item-text span { font-size: 12px; line-height: 16px; color: var(--secondary-text-color); }
+  .item-text > span { font-size: 12px; line-height: 16px; color: var(--secondary-text-color);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item-text b .gap { display: inline-block; width: 12px; }
   .item-btn { flex: none; padding: 0 14px; }
   .tag { margin-left: 4px; padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 600;
     background: rgba(var(--rgb-success-color, 67, 160, 71), .15); color: var(--success-color, #43a047); }
