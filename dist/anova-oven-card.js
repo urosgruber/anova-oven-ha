@@ -22,22 +22,20 @@
  *   power_sensor: sensor.x      # optional, that plug's power in W
  *   power_idle_w: 20            # optional, the most an idle, cool oven draws
  *
- * Power: the card never cuts power to a hot oven, because the oven cools
- * itself with its fan. "Turn off" only when the oven is idle and below
- * 50 °C; "Restart power" (for Wi-Fi) only when the oven is offline and the
- * plug reads no more than power_idle_w.
+ * Power: the card never cuts power during a cook (Stop ends a cook).
+ * "Turn off" only when the oven is idle; "Restart power" (for Wi-Fi) only
+ * when the oven is offline and the plug reads no more than power_idle_w,
+ * because a higher draw means a cook may still run.
  *
  * The HA app installs this file and registers it as a dashboard resource.
  * Start publishes {"stages": [...]} to <mqtt_prefix>/cmd/start with the
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.12.0";
+const CARD_VERSION = "0.12.1";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
-// Power off only below this temperature: above it, the fan still cools.
-const POWER_OFF_MAX_C = 50;
 // Restart power: off for this long, then on again.
 const RESTART_OFF_MS = 10000;
 const SETUP_KEY = "anova-oven-card:setup";
@@ -1121,17 +1119,14 @@ function secondary(m) {
   return esc(`${m.recipe || "Cooking"}${probe}`);
 }
 
-// What the power button may do now, and why. The rule: never cut power to
-// a hot oven, because the oven cools itself with its fan.
+// What the power button may do now, and why. The rule: never cut power
+// during a cook, or while an offline oven may still cook.
 function powerAction(m, idleW) {
   if (m.plug === null) return { action: null, why: "The plug does not report its state." };
   if (m.plug === "off") return { action: "on", why: "The oven has no power." };
   if (m.connected) {
     if (m.cooking) return { action: null, why: "Stop the cook first." };
-    if (m.temp === null || m.temp >= POWER_OFF_MAX_C) {
-      return { action: null, why: `Turn off works below ${POWER_OFF_MAX_C} °C: the fan still cools the oven.` };
-    }
-    return { action: "off", why: "The oven is idle and cool." };
+    return { action: "off", why: "The oven is idle." };
   }
   if (m.watts === null) return { action: null, why: "Offline. Without a power reading, the card cannot tell if the oven still runs." };
   if (m.watts > idleW) return { action: null, why: `Offline, but it draws ${fmtWatts(m.watts)}: the oven may still run.` };

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.1
+
+- "Turn off" in the cog panel works whenever the oven is idle. 0.12.0
+  also required a temperature below 50 °C, because we assumed that the
+  oven cools itself with its fan after a stop. It does not.
+
 ## 0.12.0
 
 - Smart plug support (optional). Add `power_switch` and `power_sensor` to
