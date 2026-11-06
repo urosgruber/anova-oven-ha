@@ -47,6 +47,10 @@ impl Topics {
     pub fn selected_attributes(&self) -> String {
         self.under("recipe/selected/attributes")
     }
+    /// The running cook's stages, as the Current recipe sensor's attributes.
+    pub fn cook_attributes(&self) -> String {
+        self.under("cook/attributes")
+    }
     pub fn event(&self) -> String {
         self.under("event")
     }
@@ -272,7 +276,11 @@ fn entities(topics: &Topics, options: &[String]) -> Vec<Entity> {
             "current_recipe",
             "Current recipe",
             Needs::Oven,
-            reading(topics, "recipe_title", json!({})),
+            reading(
+                topics,
+                "recipe_title",
+                json!({ "json_attributes_topic": topics.cook_attributes() }),
+            ),
         ),
         entity(
             "sensor",

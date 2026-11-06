@@ -162,6 +162,8 @@ function programFromStagesForTest(card) {
   h6 = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "1 of 4", "sensor.temperature": "143",
     "sensor.target_temperature": "176", "sensor.current_recipe": "Element prep", "sensor.stage_ends_at": new Date(Date.now() + 737000).toISOString(),
     "number.set_timer": "15" });
+  // The stages come from the server, not from the browser that started the cook.
+  h6.states[`sensor.${P}_current_recipe`].attributes = { stages: prep.stages };
   c6.hass = h6;
   const o = c6.shadowRoot.innerHTML;
   check("a later stage exists: Skip to step 2", o.includes("Skip to step 2"));
@@ -169,6 +171,8 @@ function programFromStagesForTest(card) {
   check("progress row shows step and time left", o.includes("Step 1/4") && /\d+:\d\d left/.test(o));
   check("temperature shows current → target", o.includes("143 → 176 °C") && o.includes('id="temp-mark"'));
   check("running chips show stage temperatures and a snowflake", o.includes("176°") && o.includes("mdi:snowflake"));
+  const c8 = new Card(); c8.setConfig({}); c8.hass = h6;
+  check("another device shows the same stage temperatures", c8.shadowRoot.innerHTML.includes("176°") && c8.shadowRoot.innerHTML.includes("mdi:snowflake"));
   c6._nextStage();
   check("skip publishes cmd/next_stage", h6.calls.at(-1).data.topic === "anova/oven/cmd/next_stage");
   h6 = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "1 of 2", "binary_sensor.next_stage_ready": "on",
