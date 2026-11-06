@@ -339,10 +339,12 @@ function programFromStagesForTest(card) {
   const lib = new Function(`${src.slice(a, b)}; return { parseMinutes, fmtMinutes };`)();
   const cases = { "3m30s": 3.5, "3m30": 3.5, "3 min 30 s": 3.5, "3.5": 3.5, "3,5": 3.5, "210s": 3.5,
     "1h30": 90, "1:30": 90, "1:02:30": 62.5, "3:30.40": 210 + 40 / 60, "3:30,40": 210 + 40 / 60, "1h2m30s": 62.5, "45": 45 };
-  const bad = Object.entries(cases).filter(([t, v]) => Math.abs(lib.parseMinutes(t) - v) > 1e-9);
+  const bad = Object.entries(cases).filter(([t, v]) => !(Math.abs(lib.parseMinutes(t) - v) <= 1e-9));
   check("typed timer takes seconds", bad.length === 0);
   if (bad.length) console.log(bad, bad.map(([t]) => lib.parseMinutes(t)));
-  check("timer field shows seconds", lib.fmtMinutes(3.5) === "3m30s" && lib.fmtMinutes(90) === "90");
+  check("timer field shows seconds", lib.fmtMinutes(3.5) === "3m30s" && lib.fmtMinutes(90) === "90" && lib.fmtMinutes(62 + 5 / 60) === "1:02.05");
+  check("two decimal digits are refused", ["1.30", "1,30", "3.25"].every((t) => lib.parseMinutes(t) === null));
+  check("formatted values parse back", [3.5, 90, 62 + 5 / 60, 0.5 + 1].every((v) => Math.abs(lib.parseMinutes(lib.fmtMinutes(v)) - v) < 1e-9));
   const h = hass(); const c = new Card(); store["anova-oven-card:setup"] = null; c.setConfig({}); c.hass = h;
   c._update({ end: "timer", timer: 3.5 });
   c._start();
@@ -406,4 +408,58 @@ function programFromStagesForTest(card) {
   const c = new Card(); c.setConfig({}); c.hass = hass(); c.connectedCallback();
   global.setTimeout = realTimeout; Date.now = realNow;
   check("the tick lands just after the next full second", delays.at(-1) === 290);
+}
+
+// --- 0.16: review fixes ---
+{
+  // A running 60 min timer with 5 min left.
+  const running = (link = {}) => {
+    const h = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "1 of 1",
+      "sensor.stage_ends_at": new Date(Date.now() + 300000).toISOString(), "number.set_timer": "60",
+      "sensor.current_recipe": "Manual cook" });
+    h.states[`sensor.${P}_current_recipe`].attributes = { stages: [{ kind: "cook", temperature_c: 180, timer_added: true, duration_secs: 3600 }] };
+    h.states[`binary_sensor.${P}_connected`].attributes = { ...link };
+    return h;
+  };
+  // A field that the test can type into.
+  let field;
+  global.document = { createElement: () => (field = { setAttribute() {}, focus() {}, select() {}, value: "" }) };
+  const edit = (h) => {
+    const c = new Card(); store["anova-oven-card:setup"] = null; c.setConfig({}); c.hass = h;
+    c.shadowRoot.getElementById = (id) => (id === "end-edit" ? { replaceWith() {} } : null);
+    c._editEnd(c._liveModel());
+    return c;
+  };
+  let h = running();
+  edit(h);
+  check("running timer field shows the time left", /^(4m59s|5)$/.test(field.value));
+  const before = h.calls.length;
+  field.onblur();
+  check("a tap and leave sends nothing", h.calls.length === before);
+  h = running(); edit(h); field.value = "10"; field.onblur();
+  check("a typed change sends the new time", h.calls.at(-1).data.payload === "600");
+
+  // The exact total from the App, not the rounded number entity.
+  h = running({ timer_total_secs: 210 });
+  h.states[`number.${P}_set_timer`] = st("4");
+  let c = new Card(); c.setConfig({}); c.hass = h;
+  check("the timer total comes from the App in seconds", c._liveModel().timerTotal === 210);
+
+  // Done from the oven's state: a later event does not undo it.
+  h = running({ cook_done: true });
+  h.states[`event.${P}_cook`] = st("2026-11-06T10:00:00Z", { event_type: "temp_reached" });
+  c = new Card(); c.setConfig({}); c.hass = h;
+  check("done stays after a later temp_reached", c._liveModel().done === true);
+  h = running({ cook_done: false });
+  h.states[`event.${P}_cook`] = st("2026-11-06T10:00:00Z", { event_type: "cook_done" });
+  c = new Card(); c.setConfig({}); c.hass = h;
+  check("cook_done false from the App wins over the event", c._liveModel().done === false);
+
+  // - and + from a value with seconds go to the whole minute, also above 10 min.
+  c = new Card(); store["anova-oven-card:setup"] = null; c.setConfig({}); c.hass = hass();
+  c._update({ end: "timer", timer: 12.5 }); c._step("end", 1, c._model());
+  check("+ from 12m30s goes to 13 min", c._view().timer === 13);
+  c._update({ timer: 12.5 }); c._step("end", -1, c._model());
+  check("- from 12m30s goes to 12 min", c._view().timer === 12);
+  delete global.document;
 }

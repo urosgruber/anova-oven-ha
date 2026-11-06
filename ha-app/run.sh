@@ -13,11 +13,23 @@ if [ -n "${TZ:-}" ]; then
   export ANOVA_TIMEZONE="${TZ}"
 fi
 
+# At boot, the MQTT broker app can start after this one. Wait up to 5
+# minutes for it: without MQTT, the safety limit and Auto stop do not run.
+if bashio::config.true 'mqtt'; then
+  for _ in $(seq 1 30); do
+    bashio::services.available mqtt && break
+    bashio::log.info "Waiting for the MQTT broker..."
+    sleep 10
+  done
+fi
+
 if bashio::config.true 'mqtt' && bashio::services.available mqtt; then
   export ANOVA_MQTT_URL="mqtt://$(bashio::services mqtt host):$(bashio::services mqtt port)"
   export ANOVA_MQTT_USERNAME="$(bashio::services mqtt username)"
   export ANOVA_MQTT_PASSWORD="$(bashio::services mqtt password)"
   bashio::log.info "MQTT on: ${ANOVA_MQTT_URL}"
+elif bashio::config.true 'mqtt'; then
+  bashio::log.warning "MQTT is on, but no MQTT broker is available: no Home Assistant entities, no safety limit and no Auto stop. Restart the app when the broker runs."
 else
   bashio::log.info "MQTT off"
 fi

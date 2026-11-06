@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.15.3";
+const CARD_VERSION = "0.16.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -250,7 +250,13 @@ class AnovaOvenCard extends HTMLElement {
     input.className = "value-input";
     input.type = "text";
     input.inputMode = kind === "timer" ? "text" : "numeric";
-    input.value = kind === "timer" ? fmtMinutes(m.cooking ? m.timerTotal / 60 : s.timer) : String(s.probe);
+    // On a running cook the field shows the time left. The oven restarts
+    // its countdown from what it gets, so the card sends only a change.
+    const left = m.cooking ? remaining(m) : null;
+    input.value = kind === "timer"
+      ? fmtMinutes(m.cooking ? (left !== null ? Math.max(left, 60) : m.timerTotal) / 60 : s.timer)
+      : String(s.probe);
+    const initial = input.value;
     input.placeholder = kind === "timer" ? "min, 3m30s, 1h30" : "°C";
     input.setAttribute("aria-label", kind === "timer" ? "Timer" : "Probe target");
     btn.replaceWith(input);
@@ -260,7 +266,7 @@ class AnovaOvenCard extends HTMLElement {
       if (done) return;
       done = true;
       this._typing = false;
-      if (commit) {
+      if (commit && input.value.trim() !== initial) {
         if (kind === "timer") {
           const min = parseMinutes(input.value);
           // The command topic takes seconds, so a typed 3m30s stays exact.
@@ -366,8 +372,8 @@ class AnovaOvenCard extends HTMLElement {
     if (what === "temp") this._update({ temp: s.temp + dir * (s.sousVide ? 0.1 : 1) });
     // From 3m30s, + goes to 4 and - to 3; then in whole steps.
     if (what === "end" && s.end === "timer") {
-      const t = s.timer + dir * timerStep(s.timer, dir);
-      this._update({ timer: dir > 0 ? Math.floor(t) : Math.ceil(t) });
+      const t = s.timer % 1 ? (dir > 0 ? Math.ceil(s.timer) : Math.floor(s.timer)) : s.timer + dir * timerStep(s.timer, dir);
+      this._update({ timer: t });
     }
     if (what === "end" && s.end === "probe") this._update({ probe: s.probe + dir });
     if (what === "steam") this._update({ steam: s.steam + dir * 10 });
@@ -412,7 +418,9 @@ class AnovaOvenCard extends HTMLElement {
       hasPlug: !!this._config.power_switch,
       watts,
       phase: this._value("sensor", "mode") || "Unknown",
-      done: cooking && lastEvent === "cook_done",
+      // From the oven's state (App 0.16.0+). The last event can be a later
+      // one, such as temp_reached during the hold.
+      done: cooking && ("cook_done" in last ? last.cook_done === true : lastEvent === "cook_done"),
       temp: this._number("sensor", "temperature"),
       target: this._number("sensor", "target_temperature"),
       wetTemp: this._number("sensor", "wet_bulb_temperature"),
@@ -428,7 +436,10 @@ class AnovaOvenCard extends HTMLElement {
       probe: this._number("sensor", "probe_temperature"),
       steam: this._number("sensor", "steam"),
       endsAt: this._stableEnd(endsAt ? Date.parse(endsAt) : null),
-      timerTotal: timerMin ? timerMin * 60 : null,
+      // Exact seconds from the App (0.16.0+); the number entity rounds to
+      // whole minutes.
+      timerTotal: cooking && Number(last.timer_total_secs) > 0 ? Number(last.timer_total_secs)
+        : timerMin ? timerMin * 60 : null,
       stage: this._value("sensor", "stage"),
       stageDescription: this._value("sensor", "stage_description"),
       recipe: this._value("sensor", "current_recipe"),
@@ -1065,7 +1076,8 @@ function parseMinutes(text) {
   const n = (v) => Number(v || 0);
   const secs = (h, m, s) => Math.round(n(h) * 3600 + n(m) * 60 + n(s)) / 60;
   let m;
-  if ((m = /^(\d+(?:\.\d+)?)$/.exec(t))) return Math.round(Number(m[1]) * 60) / 60;
+  // One decimal digit only: "1.30" could mean 1 h 30 or 1 min 30.
+  if ((m = /^(\d+(?:\.\d)?)$/.exec(t))) return Math.round(Number(m[1]) * 60) / 60;
   if ((m = /^(\d+):(\d{1,2})(?:[:.](\d{1,2}))?$/.exec(t))) return secs(m[1], m[2], m[3]);
   if ((m = /^(\d+)(?:s|sec)$/.exec(t))) return secs(0, 0, m[1]);
   if ((m = /^(?:(\d+)h)?(\d+)(?:m|min)(?:(\d+)(?:s|sec)?)?$/.exec(t))) return secs(m[1], m[2], m[3]);
@@ -1073,10 +1085,14 @@ function parseMinutes(text) {
   return null;
 }
 
-// Minutes as the timer field shows them: "90", or "3m30s" with seconds.
+// Minutes as the timer field shows them: "90"; with seconds "3m30s", or
+// "1:02.05" from an hour.
 function fmtMinutes(min) {
   const total = Math.round(min * 60);
-  return total % 60 ? `${Math.floor(total / 60)}m${total % 60}s` : String(total / 60);
+  if (!(total % 60)) return String(total / 60);
+  if (total < 3600) return `${Math.floor(total / 60)}m${total % 60}s`;
+  const two = (n) => String(n).padStart(2, "0");
+  return `${Math.floor(total / 3600)}:${two(Math.floor((total % 3600) / 60))}.${two(total % 60)}`;
 }
 
 function stageBase(st) {

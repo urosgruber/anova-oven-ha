@@ -55,7 +55,8 @@ a sous vide cook can run 24 hours or more. A cook with a timer has no
 limit while its timer runs. To cook longer, set a timer. Change the hours
 with the `safety_limit_hours` option on the App's Configuration tab. `0`
 turns the limit off. The limit works only while MQTT is on. A restart of
-the App starts the clock again.
+the App starts the clock again. If the oven does not take the stop, the
+phones get a message, and the App tries again every 5 minutes.
 
 ## Notifications
 
@@ -72,11 +73,13 @@ Companion app:
 | The last timer ends | "Timer done. The oven stopped." (with Auto stop) |
 | The cook stops | "The cook stopped." |
 | The safety limit stops the cook | "Safety stop: the oven ran 4 h with no timer, so the App stopped it." |
+| Auto stop or the safety limit cannot stop the oven | "The App could not stop the oven. Stop it on the oven." |
 | The oven goes offline during a cook | "The oven went offline during a cook. It may still run." |
 
 "Reached its temperature" means within 2 °C of the target (0.5 °C in sous
 vide). It comes once per step. When the door opens and the temperature
-falls, it does not come again.
+falls, it does not come again. "The water tank is empty" also comes once
+per step.
 
 A cook started from the dashboard card notifies the person who started
 it. A cook started on the oven notifies everyone. A person's phones are

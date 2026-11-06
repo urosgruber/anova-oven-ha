@@ -159,7 +159,8 @@ fn config(topics: &Topics, e: &Entity) -> Value {
 /// temperatures and recipe.
 const LAST_SEEN: &str = "{{ {'mode': value_json.get('mode'), 'temperature_c': value_json.get('temperature_c'), \
 'target_temperature_c': value_json.get('target_temperature_c'), 'recipe_title': value_json.get('recipe_title'), \
-'stage_started_at': value_json.get('stage_started_at')} | tojson }}";
+'stage_started_at': value_json.get('stage_started_at'), 'timer_total_secs': value_json.get('timer_total_secs'), \
+'cook_done': value_json.get('cook_done', false)} | tojson }}";
 
 fn reading(topics: &Topics, field: &str, extra: Value) -> Value {
     let mut v = json!({
