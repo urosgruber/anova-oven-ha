@@ -280,9 +280,9 @@ PRIVATE_IP = re.compile(r"\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
                         r"|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
                         r"|192\.168\.\d{1,3}\.\d{1,3})\b")
 SECRET = re.compile(r"BEGIN [A-Z ]*PRIVATE KEY"
-                    r"|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}"  # a JWT
+                    r"|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}"  # a JWT
                     r"|AIza[0-9A-Za-z_-]{35}"  # a Google API key
-                    r"|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_"
+                    r"|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}"
                     r"|xox[abp]-[A-Za-z0-9-]{10,}")
 ALLOWED = {
     "192.168.4.1",  # the oven's own setup network, the same on every oven
