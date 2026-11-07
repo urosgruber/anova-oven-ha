@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.16.0";
+const CARD_VERSION = "0.17.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -203,6 +203,7 @@ class AnovaOvenCard extends HTMLElement {
   // --- Actions ------------------------------------------------------------
 
   _start() {
+    if (this._model().descaling) return;
     this._publishStart(programTitle(this._setup), programStages(this._setup));
   }
 
@@ -405,10 +406,15 @@ class AnovaOvenCard extends HTMLElement {
     const lastEvent = (this._state("event", "cook") || {}).attributes?.event_type;
     const endsAt = this._value("sensor", "stage_ends_at");
     const timerMin = this._number("number", "set_timer");
+    // The oven's own descale program (App 0.17.0+). It is not a cook.
+    const modeState = this._state("sensor", "mode");
+    const descaling = connected && !cooking && !!modeState && modeState.state === "Descaling";
     return {
       appUp,
       connected,
       cooking,
+      descaling,
+      descaleSince: descaling && modeState.last_changed ? Date.parse(modeState.last_changed) : null,
       offlineSince: !connected && link && link.last_changed ? Date.parse(link.last_changed) : null,
       wasCooking: appUp && !connected && !!last.mode && !["idle", "unknown"].includes(last.mode),
       lastTemp: Number.isFinite(last.temperature_c) ? last.temperature_c : null,
@@ -570,7 +576,8 @@ class AnovaOvenCard extends HTMLElement {
                 </button>`}
               ${off && m.plug === "off" ? `
               <button class="feature action start" id="power-on"><ha-icon icon="mdi:power"></ha-icon>Turn on</button>` : `
-              <button class="feature action start" id="start" ${off || needsProbe ? "disabled" : ""}>
+              <button class="feature action start" id="start" ${off || needsProbe || m.descaling ? "disabled" : ""}
+                ${m.descaling ? `title="The oven descales. Start a cook after the descale."` : ""}>
                 <ha-icon icon="mdi:play"></ha-icon>${startLabel(s)}</button>`}`}
           </div>
           `}
@@ -1190,7 +1197,7 @@ function warningText(m) {
   if (!m.connected) return m.plug === "on" ? "Offline: check the oven's Wi-Fi" : "Offline: check the oven's power and Wi-Fi";
   if (m.waterEmpty) return "Water tank empty";
   if (m.cooking && m.door) return "Door open";
-  if (m.descale) return "Descale needed";
+  if (m.descale && !m.descaling) return "Descale needed";
   return "";
 }
 
@@ -1225,6 +1232,7 @@ function progress(m) {
 function secondary(m) {
   const temp = m.temp === null ? "—" : `${Math.round(m.temp)} °C`;
   const probe = m.probe !== null ? ` · probe ${Math.round(m.probe)} °C` : "";
+  if (m.descaling) return `Descaling${m.descaleSince ? ` since ${hhmm(m.descaleSince)}` : ""} · ${temp}`;
   if (!m.cooking) return `Idle · ${temp}${probe}`;
   return esc(`${m.recipe || "Cooking"}${probe}`);
 }
@@ -1236,6 +1244,7 @@ function powerAction(m, idleW) {
   if (m.plug === "off") return { action: "on", why: "The oven has no power." };
   if (m.connected) {
     if (m.cooking) return { action: null, why: "Stop the cook first." };
+    if (m.descaling) return { action: null, why: "The oven descales." };
     return { action: "off", why: "The oven is idle." };
   }
   if (m.watts === null) return { action: null, why: "Offline. Without a power reading, the card cannot tell if the oven still runs." };

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.17.0
+
+- A descale is no longer a cook. Before, the card showed "Unknown" with a
+  Stop button, and the App could send cook notifications or a safety stop.
+- The card shows "Descaling since 08:34" while the oven descales. Bake is
+  off, and the card does not turn off the smart plug.
+
 ## 0.16.0
 
 Fixes from a code review.

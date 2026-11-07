@@ -524,6 +524,24 @@ mod tests {
     }
 
     #[test]
+    fn a_descale_is_not_a_cook() {
+        // Seen on firmware 2.1.16: mode "descale", timer idle, no stages.
+        let mut s = status("idle", 0);
+        s.mode = "descale".into();
+        s.active_stage_index = None;
+        assert!(!s.is_cooking() && s.is_descaling());
+        assert_eq!(s.phase(), "Descaling");
+        let snap = Snapshot::new(Some(&s), None, true);
+        assert!(!snap.cooking && !snap.unbounded(), "no safety stop, no auto stop");
+        let mut i = status("idle", 0);
+        i.mode = "idle".into();
+        i.active_stage_index = None;
+        let idle = Snapshot::new(Some(&i), None, true);
+        assert!(milestones(&idle, &snap).is_empty(), "no cook_started");
+        assert!(milestones(&snap, &idle).is_empty(), "no cook_stopped");
+    }
+
+    #[test]
     fn the_end_and_the_water_come_from_the_running_stage() {
         let mut timed = stage("cook");
         timed.timer_added = Some(true);
