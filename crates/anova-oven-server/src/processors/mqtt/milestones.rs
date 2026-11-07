@@ -134,7 +134,11 @@ impl Snapshot {
             Vec::new()
         } else {
             let mut w = prev.faults_warned.clone();
-            w.extend(prev.faults.iter().filter(|f| !w.contains(f)).cloned());
+            for f in &prev.faults {
+                if !w.contains(f) {
+                    w.push(f.clone());
+                }
+            }
             w
         };
     }
