@@ -291,7 +291,8 @@ impl StageClock {
             return self.started_at;
         }
         let watched = std::mem::replace(&mut self.watched, true);
-        let Some(status) = status.filter(|s| s.is_cooking()) else {
+        // A descale counts too: the card shows how long it has run.
+        let Some(status) = status.filter(|s| s.is_cooking() || s.is_descaling()) else {
             self.key = None;
             self.started_at = None;
             return None;
@@ -1267,6 +1268,21 @@ mod tests {
         assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(1))), true, 200), None);
         // The next stage starts while it watches.
         assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(2))), true, 300), Some(300));
+    }
+
+    #[test]
+    fn stage_clock_times_a_descale() {
+        let mut clock = StageClock::default();
+        assert_eq!(clock.update(Some(&oven("idle", None, None)), true, 100), None);
+        let mut d = oven("idle", None, None);
+        d.mode = "descale".into();
+        assert_eq!(clock.update(Some(&d), true, 200), Some(200));
+        assert_eq!(clock.update(Some(&d), true, 900), Some(200));
+        assert_eq!(clock.update(Some(&oven("idle", None, None)), true, 3000), None);
+        // A descale that already runs when the App starts: start unknown.
+        let mut fresh = StageClock::default();
+        assert_eq!(fresh.update(Some(&d), true, 50), None);
+        assert_eq!(fresh.update(Some(&d), true, 60), None);
     }
 
     #[test]

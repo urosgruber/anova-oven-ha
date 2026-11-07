@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.17.2";
+const CARD_VERSION = "0.17.3";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -406,15 +406,17 @@ class AnovaOvenCard extends HTMLElement {
     const lastEvent = (this._state("event", "cook") || {}).attributes?.event_type;
     const endsAt = this._value("sensor", "stage_ends_at");
     const timerMin = this._number("number", "set_timer");
-    // The oven's own descale program (App 0.17.0+). It is not a cook.
+    // The oven's own descale program (App 0.17.0+). It is not a cook. Its
+    // start comes from the App (0.17.3+); after an App restart it is unknown.
     const modeState = this._state("sensor", "mode");
     const descaling = connected && !cooking && !!modeState && modeState.state === "Descaling";
+    const descaleStart = descaling && last.stage_started_at ? Date.parse(last.stage_started_at) : NaN;
     return {
       appUp,
       connected,
       cooking,
       descaling,
-      descaleSince: descaling && modeState.last_changed ? Date.parse(modeState.last_changed) : null,
+      descaleSince: Number.isFinite(descaleStart) ? descaleStart : null,
       offlineSince: !connected && link && link.last_changed ? Date.parse(link.last_changed) : null,
       wasCooking: appUp && !connected && !!last.mode && !["idle", "unknown"].includes(last.mode),
       lastTemp: Number.isFinite(last.temperature_c) ? last.temperature_c : null,
@@ -1229,10 +1231,20 @@ function progress(m) {
 
 // The status line: the oven's state when idle, the program's name while
 // cooking. Details are in the progress row.
+// A descale took 48 min on firmware 2.1.16 (2026-11-07), with fast water
+// and tray changes. The oven does not report its own countdown.
+const DESCALE_MIN = 48;
+
+function descaleLeft(m) {
+  if (m.descaleSince === null) return "";
+  const left = DESCALE_MIN - Math.floor((Date.now() - m.descaleSince) / 60000);
+  return left > 1 ? ` · about ${left} min left` : " · almost done";
+}
+
 function secondary(m) {
   const temp = m.temp === null ? "—" : `${Math.round(m.temp)} °C`;
   const probe = m.probe !== null ? ` · probe ${Math.round(m.probe)} °C` : "";
-  if (m.descaling) return `Descaling${m.descaleSince ? ` since ${hhmm(m.descaleSince)}` : ""} · ${temp}`;
+  if (m.descaling) return `Descaling${descaleLeft(m)} · ${temp}`;
   if (!m.cooking) return `Idle · ${temp}${probe}`;
   return esc(`${m.recipe || "Cooking"}${probe}`);
 }
