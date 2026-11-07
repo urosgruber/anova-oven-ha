@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.19.0
+
+The server now follows the new upstream version, which has a license
+(MIT OR Apache-2.0). The App, the card and its tests are MIT.
+
+- New from upstream: a one-step manual cook with its own entities in HA
+  ("Manual cook" sensor, "Start manual" button, and numbers and selects
+  for its settings). The dashboard card does not need them.
+- New from upstream: in the web page's recipe editor, a recipe's last
+  step can turn the oven off at its end. Auto stop then leaves that cook
+  to the recipe, so the oven gets only one Stop.
+- HA shows the oven temperatures in whole degrees. The card still shows
+  sous vide in 0.1 °C.
+- The "Set timer" number never shows less than 1 minute.
+
 ## 0.18.0
 
 - New: the App reads the oven's fault flags. Before, it ignored them. A
