@@ -1382,6 +1382,7 @@ mod tests {
             current_stage_kind: "cook".into(),
             next_stage_ready: false,
             next_stage_description: None,
+            next_stage_prompt: None,
         });
         let v = state_json(Some(&status), None, true, None, Some(400));
         assert_eq!(v["phase"], "Cooking");
