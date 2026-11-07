@@ -25,6 +25,7 @@ Target capabilities:
 │  ├── POST /api/update-recipes → refresh + return list    │
 │  ├── GET  /api/history        → cook history JSON        │
 │  ├── GET  /api/current-cook   → in-progress cook or 204  │
+│  ├── POST /api/current-cook/save → save cook as recipe   │
 │  ├── POST /api/start          → start cook from recipe   │
 │  ├── POST /api/stop           → CMD_APO_STOP             │
 │  └── …controls (local mode)                              │
@@ -157,15 +158,18 @@ types, not every field):
   `activeStageId`, and an optional `cook_progress: Option<CookProgress>`.
 - **`CookProgress`** — server-derived cook progression (recipe title,
   current stage index, total stage count, current/next stage description
-  and kind, `next_stage_ready` flag for manual-advance prompts). Included
+  and kind, `next_stage_ready` flag for manual-advance prompts, and
+  `next_stage_prompt`, the waiting stage's note for the user). Included
   inline on `GET /status` while a cook is active rather than requiring the
   pico to re-decode `CurrentCook` every tick.
 - **`Recipe` + `Stage`** — saved recipe with stages. `Stage` carries
   Firestore stage id (used as `stageId` for `CMD_APO_START_STAGE` — see
   exploration note below), kind, target temperature, optional bulb mode,
   duration, timer/probe flags, probe target, steam %, fan speed,
-  `user_action_required`, rack position, heating-element flags, vent, and
-  title. `Recipe::normalize()` and `Stage::normalize_fan_speed()` enforce
+  `user_action_required`, rack position, heating-element flags, vent,
+  title, `turn_off_at_end` (last stage only; see below), and `prompt`: a
+  note of up to 100 characters for while the oven waits to start the stage
+  (only on a stage with `user_action_required`), e.g. "Rotate the pan". `Recipe::normalize()` and `Stage::normalize_fan_speed()` enforce
   Anova's "fan must be 100% with rear heat or steam" rule.
 - **`HistoryEntry`** — recipe title (or `"[manual]"`), `ended_at` (ISO 8601),
   stage count.
@@ -270,6 +274,15 @@ still available.
   usable the requests go unanswered, which the oven tolerates.
 - `ANOVA_HEALTHCHECK_INTERVAL_SECS` — `CMD_APO_HEALTHCHECK` cadence
   (default `10`, as the real cloud does)
+- `ANOVA_PREHEAT_TOLERANCE_F` — how far short of its setpoint, in °F, a
+  preheat may stall and still count as reached (default `2`). The oven only
+  ends a preheat at the setpoint itself, and at low temperatures its
+  controller can settle a degree or two below and stay there. After 10s
+  within the tolerance the server starts the next stage itself, or, when
+  that stage waits for the user, reports the cook as waiting
+  (`stage_transition_pending_user_action`) while the oven keeps heating.
+  `0` leaves preheats to the oven. Cloud mode's progress tracker uses the
+  same tolerance to call a preheat done.
 - `ANOVA_DATA_DIR` — where the local store keeps its files (default
   `anova-oven-data`, relative to the working directory):
   - `recipes/*.json` — one `Recipe` per file, as `GET /recipes` serves
@@ -278,8 +291,11 @@ still available.
     added by hand works too. Re-read on every refresh and
     `POST /update-recipes`.
   - `active-cook.json` — a journal of the cook in flight, keyed by the
-    oven's `cookId`: title, recipe ID, start time, and when the oven last
-    reported it. Written on `/start` (or on first sight of a cook started
+    oven's `cookId`: title, recipe ID, start time, when the oven last
+    reported it, and what the server does with the cook that the oven
+    doesn't keep (`turn_off_at_end`, and each stage's `prompt` by the
+    stage ID the oven was sent), laid back over the oven's stages in the
+    current cook. Written on `/start` (or on first sight of a cook started
     from the oven's panel, as `[manual]`), rewritten in place on each report
     of that cook (every 5s while cooking), and removed when the cook goes
     to history. A restart mid-cook keeps the title. The stages come from the
@@ -308,12 +324,23 @@ are always sent as Celsius.
   saves as a preheat stage with the same settings followed by the cook
   stage (the pairing the oven expects; see `recipe::rewrite_preheat_stage_ids`).
   Per step: title, mode (oven or sous vide), temperature, steam, heating
-  elements (a radio of the six allowed combinations), whether it starts
-  automatically (and, with a preheat, whether it carries on after
-  preheating), and how it ends (a radio: until you move on, a timer or a
-  probe). A preheat matters because the oven starts a stage's timer the
-  moment the stage starts: without one, a timed stage counts down while the
-  oven is still heating. Fan, vent and rack aren't shown:
+  elements (a radio of the six allowed combinations), preheat (a radio: none;
+  preheat, then wait for you; or preheat, then start cooking) and how it ends
+  (a radio: a timer, a probe, or when you say). A preheat matters because the
+  oven starts a stage's timer the moment the stage starts: without one, a
+  timed stage counts down while the oven is still heating. Between two
+  steps, when the first ends on its own (timer, probe, or a preheat-only
+  step at temperature), a radio picks whether the next goes straight on or
+  waits for you; it's the next step's first stage's `user_action_required`.
+  The first step's flag isn't shown and is kept as saved. Each "wait for
+  you" choice (between steps, or preheat then wait) has an optional note
+  for while it waits: that stage's `prompt`, shown on the status page by
+  Start next stage (and served as `cook_progress.next_stage_prompt` for the
+  panels). Under the last
+  step, when it ends on a timer or probe, a radio picks whether the oven
+  keeps holding until you press Stop (the oven's own behaviour) or turns off:
+  the last stage's `turn_off_at_end`. Each choice has a
+  one-line hint under it saying what the oven will do. Fan, vent and rack aren't shown:
   new stages get fan 100 and no vent or rack, and existing values are kept on
   save, as is anything else the form doesn't show. The page checks the
   same rules as the API as you type, and Save stays disabled until they pass.
@@ -395,9 +422,17 @@ cargo run -p anova-oven-server
   `availability` (last-will), `state` (the `/status` JSON plus `connected`,
   `phase`, `recipe_title`, `timer_remaining_secs`, `stage_ends_at`),
   `next_stage/availability`, `recipes`, `recipe/selected` and its
-  `/attributes`, `event` (milestones, not retained) and `cmd/<name>`
-  (`start`, `stop`, `select_recipe`, and in local mode `next_stage`,
-  `lamp`, `timer`, `temperature`). Milestones (`cook_started`,
+  `/attributes`, `manual` (the manual cook being set up), `event`
+  (milestones, not retained) and `cmd/<name>` (`start`, `stop`,
+  `select_recipe`, `start_manual`, `manual/<field>`, and in local mode
+  `next_stage`, `lamp`, `timer`, `temperature`). A manual cook from Home
+  Assistant is one step, as the web UI's stage editor makes one (a cook
+  stage, optionally led by a preheat): its fields are number and select
+  entities over a draft the server keeps in memory (`mqtt::manual`), with a
+  sensor showing the summary and any `problem`, and the Start manual cook
+  button sends it through `StartManualCook`, checked by the same
+  `local_store::normalize` as `POST /start`. `cmd/start_manual` also takes
+  `{"title", "stages"}` for a cook given in full. Milestones (`cook_started`,
   `preheat_done`, `stage_started`, `stage_waiting`, `cook_done`,
   `cook_stopped`, `oven_lost`) are a pure function of successive snapshots
   in `mqtt::milestones`, keyed by the oven's `cookId`; the first snapshot
@@ -420,6 +455,17 @@ supervisor restarts the whole process from a clean slate, rather than
 leaving a zombie where some processors serve stale data while a
 load-bearing one is gone. Run under `systemd` with `Restart=always` (or an
 equivalent container restart policy) to make this self-healing.
+
+**Ending a cook (local mode).** The oven never stops a cook by itself: at
+the end of the last stage it keeps holding its settings (see
+[oven-cloud-emulation.md](oven-cloud-emulation.md#running-a-cook)). When the
+cook's last stage has `turn_off_at_end`, the state machine stops it as
+`POST /stop` would, once the oven reports it done (`cook_done`) or, for a
+probe stage, the probe reaches its target. The lamp follows the cook: the
+server turns it on when a cook starts (unless it's already on, and not for
+a cook already running when the server starts), and off just before every
+stop it sends, since the oven ignores `CMD_APO_SET_LAMP` once idle. A cook
+stopped from the oven's own panel is left to the oven.
 
 **Logging what the oven does.** Some of what the oven does isn't in any
 recipe: the lamp has no per-stage setting (only a preference and
@@ -489,6 +535,16 @@ without the prefix: `GET /status` is `GET /api/status`. (The pico's own
                           where recipes are Anova's.
 - `GET /history`        — cached cook history with resolved titles.
 - `GET /current-cook`   — `CurrentCook` JSON, or 204 if none in progress.
+                          Adds `can_save`: in local mode, whether the cook
+                          isn't from a recipe that's still saved.
+- `POST /current-cook/save` — body `{ "title": "..." }` (optional; the
+                          cook's title by default). Saves the running cook's
+                          stages as a new recipe (`201` with it), and makes
+                          the cook that recipe's, so it goes to history
+                          under its title. `409` if the cook's recipe is
+                          already saved or nothing is cooking, `422` if the
+                          stages don't pass the recipe checks, `501` in
+                          cloud mode.
 - `POST /start`         — body `{ "recipe_id": "..." }`, or a manual cook
                           `{ "title": "...", "stages": [Stage] }` (title
                           optional, "Manual cook" by default; the stages
@@ -564,8 +620,8 @@ a staleness signal.
                                (recipes, history, current cook)
 - `src/processors/mqtt.rs`   — Home Assistant over MQTT (connection,
                                retained state, commands); `mqtt/discovery.rs`,
-                               `mqtt/milestones.rs`, `mqtt/recipes.rs` are
-                               pure and unit-tested
+                               `mqtt/manual.rs`, `mqtt/milestones.rs`,
+                               `mqtt/recipes.rs` are pure and unit-tested
 - `src/processors/state_machine.rs` — central decision logic
 - `src/processors/http.rs`   — axum router + handlers
 - `src/runtime/types.rs`     — `StateMachineCommand`/`Event`, `WsCommand`/

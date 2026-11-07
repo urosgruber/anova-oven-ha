@@ -44,6 +44,8 @@ fn stage(kind: &str) -> Stage {
         heating_element_bottom: Some(false),
         vent_open: Some(false),
         title: None,
+        turn_off_at_end: None,
+        prompt: None,
     }
 }
 
@@ -114,7 +116,12 @@ fn started_cook_keeps_its_title_and_start_time() {
     let dir = TempDir::new();
     let mut store = store_with_bread(&dir);
     store
-        .cook_started("ios-cook", "r1", ts("2026-10-15T18:00:00.5Z"))
+        .cook_started(
+            "ios-cook",
+            "r1",
+            Default::default(),
+            ts("2026-10-15T18:00:00.5Z"),
+        )
         .unwrap();
 
     // Later, and again after a restart (a new store over the same files).
@@ -173,7 +180,12 @@ fn each_report_rewrites_the_journal_in_place() {
     let dir = TempDir::new();
     let mut store = store_with_bread(&dir);
     store
-        .cook_started("ios-1", "r1", ts("2026-10-15T17:00:00Z"))
+        .cook_started(
+            "ios-1",
+            "r1",
+            Default::default(),
+            ts("2026-10-15T17:00:00Z"),
+        )
         .unwrap();
     assert!(journal(&dir).get("last_seen_at").is_none());
 
@@ -193,7 +205,12 @@ fn a_cook_watched_to_the_end_ends_when_the_oven_goes_idle() {
     let dir = TempDir::new();
     let mut store = store_with_bread(&dir);
     store
-        .cook_started("ios-1", "r1", ts("2026-10-15T17:00:00Z"))
+        .cook_started(
+            "ios-1",
+            "r1",
+            Default::default(),
+            ts("2026-10-15T17:00:00Z"),
+        )
         .unwrap();
     store
         .oven_reported(Some(&oven_cook("ios-1", 10)), ts("2026-10-15T17:00:10Z"))
@@ -215,7 +232,12 @@ fn a_cook_that_ended_while_the_server_was_down_is_found_on_restart() {
     let dir = TempDir::new();
     let mut before = store_with_bread(&dir);
     before
-        .cook_started("ios-1", "r1", ts("2026-10-15T17:00:00Z"))
+        .cook_started(
+            "ios-1",
+            "r1",
+            Default::default(),
+            ts("2026-10-15T17:00:00Z"),
+        )
         .unwrap();
     before
         .oven_reported(Some(&oven_cook("ios-1", 10)), ts("2026-10-15T17:20:00Z"))
@@ -255,7 +277,12 @@ fn a_start_the_oven_never_acted_on_leaves_no_history() {
     let dir = TempDir::new();
     let mut store = store_with_bread(&dir);
     store
-        .cook_started("ios-1", "r1", ts("2026-10-15T17:00:00Z"))
+        .cook_started(
+            "ios-1",
+            "r1",
+            Default::default(),
+            ts("2026-10-15T17:00:00Z"),
+        )
         .unwrap();
     assert!(!store
         .oven_reported(None, ts("2026-10-15T17:00:30Z"))
@@ -272,7 +299,12 @@ fn a_start_over_a_running_cook_ends_it() {
         .oven_reported(Some(&oven_cook("panel-1", 0)), ts("2026-10-15T17:00:00Z"))
         .unwrap();
     assert!(store
-        .cook_started("ios-2", "r1", ts("2026-10-15T17:10:00Z"))
+        .cook_started(
+            "ios-2",
+            "r1",
+            Default::default(),
+            ts("2026-10-15T17:10:00Z")
+        )
         .unwrap());
     let history = store.history().unwrap();
     assert_eq!(history[0].recipe_title, MANUAL_TITLE);
@@ -439,6 +471,21 @@ fn recipes_the_oven_cant_run_are_refused() {
     hot_probe.probe_added = Some(true);
     hot_probe.probe_target_c = Some(120.0);
     assert!(invalid(draft("Hot probe", vec![hot_probe])));
+    let mut off_early = stage("cook");
+    off_early.timer_added = Some(true);
+    off_early.turn_off_at_end = Some(true);
+    assert!(invalid(draft("Off early", vec![off_early, stage("cook")])));
+    let mut chatty = stage("cook");
+    chatty.user_action_required = Some(true);
+    chatty.prompt = Some("x".repeat(101));
+    assert!(invalid(draft("Chatty", vec![chatty])));
+    let mut unprompted = stage("cook");
+    unprompted.prompt = Some("Rotate the pan".into());
+    assert!(invalid(draft("Never waits", vec![unprompted])));
+    let mut off_whenever = stage("cook");
+    off_whenever.duration_secs = None;
+    off_whenever.turn_off_at_end = Some(true);
+    assert!(invalid(draft("Off whenever", vec![off_whenever])));
     // Nothing was written.
     assert!(files.list().unwrap().is_empty());
 }
@@ -467,6 +514,7 @@ fn a_manual_cook_is_journalled_under_its_title_and_goes_to_history() {
             None,
             "Quick roast".into(),
             1,
+            Default::default(),
             ts("2026-10-15T18:00:00Z"),
         )
         .unwrap();
@@ -485,4 +533,108 @@ fn a_manual_cook_is_journalled_under_its_title_and_goes_to_history() {
         .oven_reported(None, ts("2026-10-15T18:10:00Z"))
         .unwrap());
     assert_eq!(store.history().unwrap()[0].recipe_title, "Quick roast");
+}
+
+#[test]
+fn a_cook_that_turns_off_at_the_end_says_so_on_its_last_stage() {
+    let dir = TempDir::new();
+    let files = RecipeFiles::new(&dir.0);
+    let mut last = stage("cook");
+    last.timer_added = Some(true);
+    last.turn_off_at_end = Some(true);
+    let mut kept = stage("cook");
+    kept.turn_off_at_end = Some(false);
+    let saved = files.create(draft("Proof", vec![kept, last])).unwrap();
+    assert_eq!(saved.stages[0].turn_off_at_end, None);
+    assert_eq!(saved.stages[1].turn_off_at_end, Some(true));
+
+    let mut store = LocalStore::new(dir.0.clone());
+    let extras = crate::runtime::types::CookExtras::from_stages(&saved.stages);
+    store
+        .cook_started("ios-cook", &saved.id, extras, ts("2026-10-15T18:00:00Z"))
+        .unwrap();
+    // The oven doesn't keep it; the journal does, across a restart.
+    for mut store in [store, LocalStore::new(dir.0.clone())] {
+        let cook = store
+            .current_cook(
+                Some(&oven_cook("ios-cook", 300)),
+                ts("2026-10-15T18:05:00Z"),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(cook.stages[0].turn_off_at_end, None);
+        assert_eq!(cook.stages[1].turn_off_at_end, Some(true));
+    }
+}
+
+#[test]
+fn a_waiting_stage_keeps_its_prompt_through_the_cook() {
+    let dir = TempDir::new();
+    let files = RecipeFiles::new(&dir.0);
+    let mut waits = stage("cook");
+    waits.user_action_required = Some(true);
+    waits.prompt = Some("  Rotate the pan  ".into());
+    let mut blank = stage("cook");
+    blank.user_action_required = Some(true);
+    blank.prompt = Some(" ".into());
+    let saved = files
+        .create(draft("Roast", vec![stage("cook"), waits, blank]))
+        .unwrap();
+    assert_eq!(saved.stages[1].prompt.as_deref(), Some("Rotate the pan"));
+    assert_eq!(saved.stages[2].prompt, None);
+
+    // Keyed by the IDs the oven reports the stages by.
+    let mut sent = saved.stages.clone();
+    for (i, stage) in sent.iter_mut().enumerate() {
+        stage.id = Some(format!("ios-{i}"));
+    }
+    let mut store = LocalStore::new(dir.0.clone());
+    let extras = crate::runtime::types::CookExtras::from_stages(&sent);
+    store
+        .cook_started("ios-cook", &saved.id, extras, ts("2026-10-15T18:00:00Z"))
+        .unwrap();
+    let mut reported = oven_cook("ios-cook", 300);
+    reported.stages = sent.clone();
+    for stage in &mut reported.stages {
+        stage.prompt = None;
+    }
+    let cook = store
+        .current_cook(Some(&reported), ts("2026-10-15T18:05:00Z"))
+        .unwrap()
+        .unwrap();
+    let prompts: Vec<_> = cook.stages.iter().map(|s| s.prompt.as_deref()).collect();
+    assert_eq!(prompts, [None, Some("Rotate the pan"), None]);
+}
+
+#[test]
+fn a_cook_saved_as_a_recipe_goes_to_history_under_it() {
+    let dir = TempDir::new();
+    let mut store = LocalStore::new(dir.0.clone());
+    store
+        .journal_start(
+            "ios-m",
+            None,
+            MANUAL_TITLE.into(),
+            1,
+            Default::default(),
+            ts("2026-10-15T18:00:00Z"),
+        )
+        .unwrap();
+    store
+        .oven_reported(Some(&oven_cook("ios-m", 60)), ts("2026-10-15T18:01:00Z"))
+        .unwrap();
+
+    store.link_cook("r9".into(), "Sunday roast".into()).unwrap();
+    let cook = store
+        .current_cook(Some(&oven_cook("ios-m", 120)), ts("2026-10-15T18:02:00Z"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(cook.recipe_id.as_deref(), Some("r9"));
+    assert_eq!(cook.recipe_title, "Sunday roast");
+    assert_eq!(cook.started_at, "2026-10-15T18:00:00Z");
+
+    store
+        .oven_reported(None, ts("2026-10-15T18:10:00Z"))
+        .unwrap();
+    assert_eq!(store.history().unwrap()[0].recipe_title, "Sunday roast");
 }

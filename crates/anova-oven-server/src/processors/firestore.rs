@@ -70,7 +70,11 @@ impl FirestoreProcessor {
                         })
                         .await;
                 }
-                StoreCommand::PatchCookRecipeRef { cook_id, from } => {
+                StoreCommand::PatchCookRecipeRef {
+                    cook_id,
+                    from,
+                    extras: _,
+                } => {
                     // A manual cook has no recipe to tag it with.
                     let recipe_id = from.recipe_id().map(String::from);
                     let out = match &recipe_id {
@@ -94,6 +98,8 @@ impl FirestoreProcessor {
                 }
                 // Anova's cloud records the cook in the user's history itself.
                 StoreCommand::OvenReported { oven_cook: _ } => {}
+                // Cooks are only saved as recipes in local mode.
+                StoreCommand::LinkCookToRecipe { .. } => {}
                 StoreCommand::ResolveManualCookTitle { cook } => {
                     let out = instrumented(
                         "resolve_manual_cook_title",

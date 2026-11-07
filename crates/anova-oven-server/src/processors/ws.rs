@@ -451,6 +451,8 @@ mod tests {
             heating_element_bottom: Some(true),
             vent_open: Some(false),
             title: Some("Preheat".into()),
+            turn_off_at_end: None,
+            prompt: None,
         }
     }
 

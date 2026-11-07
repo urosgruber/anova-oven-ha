@@ -10,6 +10,7 @@
 //! retained state.
 
 mod discovery;
+mod manual;
 mod milestones;
 mod recipes;
 
@@ -150,12 +151,16 @@ pub async fn run(config: MqttConfig, mut sources: Sources) {
         recipes: Vec::new(),
         options: Vec::new(),
         selected: None,
+        manual: manual::Draft::default(),
+        last_manual: None,
         last_state: None,
         auto_stop: true,
         pending_started_by: None,
         started_by: None,
         last_cook: None,
         last_recipes: None,
+        unit: None,
+        discovered_unit: None,
         last_snapshot: None,
         next_stage_ready: None,
         safety: SafetyClock::new(config.safety_limit),
@@ -240,6 +245,9 @@ struct Processor {
     /// The selected recipe's ID. Lives here, not in Home Assistant, so it
     /// survives an HA restart and a stale select can't start the wrong one.
     selected: Option<String>,
+    /// The manual cook being set up. Here for the same reasons.
+    manual: manual::Draft,
+    last_manual: Option<String>,
     last_state: Option<String>,
     /// Stop the oven at `cook_done`. On until the retained command says
     /// otherwise.
@@ -254,6 +262,12 @@ struct Processor {
     last_cook: Option<String>,
     /// The recipes-with-stages payload last published.
     last_recipes: Option<String>,
+    /// The oven's display unit, from the last status that had one: the
+    /// temperature numbers' unit, and the summaries'. Kept while the oven
+    /// is away, so their discovery doesn't flip to °C and back.
+    unit: Option<String>,
+    /// The unit the discovery configs went out in.
+    discovered_unit: Option<String>,
     /// `None` until the first snapshot, which is the baseline: a restart
     /// mid-cook announces nothing.
     last_snapshot: Option<Snapshot>,
@@ -426,12 +440,13 @@ impl Processor {
     /// Discovery, availability and every retained topic, then the
     /// subscription. On every connect, since the broker may have lost them.
     async fn on_connected(&mut self, sources: &Sources) {
-        self.recipes = sources.read_model.borrow().recipes.clone();
+        let model = sources.read_model.borrow().clone();
+        self.recipes = model.recipes;
         self.options = recipes::options(&self.recipes);
-        let titles = self.titles();
-        for (topic, payload) in discovery::configs(&self.topics, self.local, &titles) {
-            self.publish(topic, true, payload).await;
+        if let Some(status) = &model.status {
+            self.unit = Some(status.temperature_unit.clone());
         }
+        self.publish_discovery().await;
         self.publish(self.topics.availability(), true, "online")
             .await;
         if let Err(e) = self
@@ -446,8 +461,18 @@ impl Processor {
         self.publish_recipes().await;
         self.last_state = None;
         self.last_cook = None;
+        self.last_manual = None;
         self.next_stage_ready = None;
         self.on_change(sources, true).await;
+    }
+
+    async fn publish_discovery(&mut self) {
+        let unit = self.unit();
+        for (topic, payload) in discovery::configs(&self.topics, self.local, &self.titles(), &unit)
+        {
+            self.publish(topic, true, payload).await;
+        }
+        self.discovered_unit = Some(unit);
     }
 
     fn titles(&self) -> Vec<String> {
@@ -580,10 +605,19 @@ impl Processor {
         .await;
     }
 
+    /// The manual cook's state, if it changed. Its summary is in the
+    /// oven's display unit, so a change of unit counts.
+    async fn publish_manual(&mut self) {
+        let state = self.manual.state(&self.unit()).to_string();
+        if self.last_manual.as_deref() != Some(state.as_str()) {
+            self.publish(self.topics.manual(), true, state.clone())
+                .await;
+            self.last_manual = Some(state);
+        }
+    }
+
     fn unit(&self) -> String {
-        self.last_snapshot
-            .as_ref()
-            .map_or_else(|| "C".into(), |s| s.unit.clone())
+        self.unit.clone().unwrap_or_else(|| "C".into())
     }
 
     /// Something may have changed: republish what did, and announce any
@@ -614,6 +648,13 @@ impl Processor {
             status
         });
 
+        if let Some(status) = &status {
+            self.unit = Some(status.temperature_unit.clone());
+            if self.discovered_unit.is_some() && self.discovered_unit != self.unit {
+                self.publish_discovery().await;
+            }
+        }
+
         let ends_at = EndAnchor::update(
             &mut self.end_anchor,
             status.as_ref().and_then(OvenStatus::timer_remaining_secs),
@@ -639,6 +680,14 @@ impl Processor {
             self.last_cook = Some(cook);
         }
 
+        // A recipe whose last stage says `turn_off_at_end`: the state
+        // machine stops it at the end. Auto stop must not stop it a second
+        // time, or the second stop fails and the phones get a false alarm.
+        let machine_stops = model
+            .current_cook
+            .as_ref()
+            .and_then(|c| c.stages.last())
+            .is_some_and(|s| s.turn_off_at_end == Some(true));
         let mut snapshot = Snapshot::new(status.as_ref(), model.current_cook.as_ref(), connected);
         if let Some(prev) = &self.last_snapshot {
             snapshot.carry(prev);
@@ -692,7 +741,7 @@ impl Processor {
         if had_baseline || (connected && status.is_some()) {
             self.last_snapshot = Some(snapshot);
         }
-        if done && self.auto_stop {
+        if done && self.auto_stop && !machine_stops {
             self.stop_cook(sources, "auto_stop").await;
         } else if let Some(limit) = unbounded_too_long {
             info!(hours = limit.as_secs_f64() / 3600.0, "[mqtt] safety limit: stopping the cook");
@@ -705,6 +754,7 @@ impl Processor {
                 self.stop_reason = None;
             }
         }
+        self.publish_manual().await;
     }
 
     async fn publish_auto_stop(&self) {
@@ -821,6 +871,33 @@ impl Processor {
                     }
                 }
             }
+            "start_manual" => {
+                // `{"title": "…", "stages": [...]}` for any manual cook, or
+                // anything else (a button's `PRESS`) for the one set up in
+                // the manual entities.
+                let recipe = match serde_json::from_str::<ManualStart>(&text) {
+                    Ok(start) => manual::check(start.title, start.stages),
+                    Err(_) => self.manual.recipe(),
+                };
+                match recipe {
+                    Ok(recipe) => StateMachineCommand::StartManualCook {
+                        title: recipe.title,
+                        stages: recipe.stages,
+                        reply: reply_tx,
+                    },
+                    Err(e) => {
+                        self.command_failed("start_manual", &e).await;
+                        return;
+                    }
+                }
+            }
+            field if field.starts_with("manual/") => {
+                if let Err(e) = self.manual.set(&field["manual/".len()..], &text) {
+                    self.command_failed(field, &e).await;
+                }
+                self.publish_manual().await;
+                return;
+            }
             "stop" => StateMachineCommand::StopCook { reply: reply_tx },
             "auto_stop" => {
                 match text.as_str() {
@@ -873,6 +950,14 @@ impl Processor {
             }
         }
     }
+}
+
+/// A manual cook given in full, as `POST /start` takes one.
+#[derive(serde::Deserialize)]
+struct ManualStart {
+    #[serde(default)]
+    title: Option<String>,
+    stages: Vec<anova_oven_api::Stage>,
 }
 
 /// Host and port from `mqtt://host[:port]`. TLS (`mqtts://`) isn't supported

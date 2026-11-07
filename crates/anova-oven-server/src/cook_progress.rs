@@ -84,14 +84,21 @@ pub struct CookProgressTask {
     /// Local mode: take the stage and the waiting-for-you flag from the oven
     /// instead of inferring them.
     follow_oven: bool,
+    /// How far short of its target a preheat counts as reached.
+    preheat_tolerance_c: f32,
 }
 
 impl CookProgressTask {
-    pub fn new(progress_tx: watch::Sender<Option<CookProgress>>, follow_oven: bool) -> Self {
+    pub fn new(
+        progress_tx: watch::Sender<Option<CookProgress>>,
+        follow_oven: bool,
+        preheat_tolerance_c: f32,
+    ) -> Self {
         Self {
             tracker: None,
             progress_tx,
             follow_oven,
+            preheat_tolerance_c,
         }
     }
 
@@ -328,6 +335,7 @@ impl CookProgressTask {
             &mut tracker.warned_no_criterion,
             stage_index,
             &mut tracker.timer_has_run,
+            self.preheat_tolerance_c,
         );
 
         if !complete {
@@ -386,11 +394,7 @@ fn build_cook_progress(tracker: &Tracker) -> CookProgress {
     let current_kind = current
         .map(|s| s.kind.clone())
         .unwrap_or_else(|| "cook".into());
-    let next_description = if tracker.next_stage_ready {
-        tracker.next_stage().map(Stage::short_description)
-    } else {
-        None
-    };
+    let next = tracker.next_stage().filter(|_| tracker.next_stage_ready);
 
     CookProgress {
         recipe_title: tracker.recipe_title.clone(),
@@ -399,13 +403,15 @@ fn build_cook_progress(tracker: &Tracker) -> CookProgress {
         current_stage_description: current_description,
         current_stage_kind: current_kind,
         next_stage_ready: tracker.next_stage_ready,
-        next_stage_description: next_description,
+        next_stage_description: next.map(Stage::short_description),
+        next_stage_prompt: next.and_then(|s| s.prompt.clone()),
     }
 }
 
 /// Evaluate the three completion heuristics (timer, probe, preheat + hold)
 /// for `stage` given the latest `status`. Mutates `preheat_cross_since` to
-/// track the preheat stability window.
+/// track the preheat stability window. A preheat within
+/// `preheat_tolerance_c` of its target counts as having crossed it.
 fn evaluate_stage_completion(
     stage: &Stage,
     status: &OvenStatus,
@@ -413,6 +419,7 @@ fn evaluate_stage_completion(
     warned_no_criterion: &mut bool,
     stage_index: usize,
     timer_has_run: &mut bool,
+    preheat_tolerance_c: f32,
 ) -> bool {
     // Track whether the timer has been observed running. This guards against
     // falsely declaring a timed stage complete when the oven initialises
@@ -469,9 +476,9 @@ fn evaluate_stage_completion(
         if is_preheat {
             let target = stage.temperature_c;
             let current = status.current_temperature_c();
-            let hysteresis_floor = target - PREHEAT_HYSTERESIS_C;
+            let hysteresis_floor = target - preheat_tolerance_c.max(PREHEAT_HYSTERESIS_C);
             match *preheat_cross_since {
-                None if current >= target => {
+                None if current >= target - preheat_tolerance_c => {
                     *preheat_cross_since = Some(Instant::now());
                 }
                 Some(_) if current < hysteresis_floor => {
@@ -546,12 +553,12 @@ mod tests {
 
     fn task_with_rx() -> (CookProgressTask, watch::Receiver<Option<CookProgress>>) {
         let (tx, rx) = watch::channel(None);
-        (CookProgressTask::new(tx, false), rx)
+        (CookProgressTask::new(tx, false, 0.0), rx)
     }
 
     fn local_task_with_rx() -> (CookProgressTask, watch::Receiver<Option<CookProgress>>) {
         let (tx, rx) = watch::channel(None);
-        (CookProgressTask::new(tx, true), rx)
+        (CookProgressTask::new(tx, true, 0.0), rx)
     }
 
     fn oven_status(active: usize, pending: bool) -> OvenStatus {
@@ -582,6 +589,22 @@ mod tests {
         // The user started it.
         task.on_status(Some(&oven_status(1, false)));
         assert_eq!(progress(&rx), (1, false));
+    }
+
+    #[test]
+    fn a_waiting_stage_passes_on_its_prompt() {
+        let (mut task, rx) = local_task_with_rx();
+        let mut cook = stale_cook();
+        cook.stages[1].prompt = Some("Rotate the pan".into());
+        task.on_current_cook(Some(cook), Some(&oven_status(0, false)));
+        let prompt = |rx: &watch::Receiver<Option<CookProgress>>| {
+            rx.borrow().clone().and_then(|p| p.next_stage_prompt)
+        };
+        assert_eq!(prompt(&rx), None, "not until the oven waits");
+        task.on_status(Some(&oven_status(0, true)));
+        assert_eq!(prompt(&rx).as_deref(), Some("Rotate the pan"));
+        task.on_status(Some(&oven_status(1, false)));
+        assert_eq!(prompt(&rx), None);
     }
 
     #[test]
@@ -632,6 +655,8 @@ mod tests {
             heating_element_bottom: Some(true),
             vent_open: Some(false),
             title: Some("Stage".into()),
+            turn_off_at_end: None,
+            prompt: None,
         }
     }
 
@@ -704,6 +729,7 @@ mod tests {
             &mut warned_no_criterion,
             1,
             &mut timer_has_run,
+            0.0,
         );
 
         assert!(!complete);
@@ -732,9 +758,36 @@ mod tests {
             &mut warned_no_criterion,
             1,
             &mut timer_has_run,
+            0.0,
         );
 
         assert!(!complete);
+    }
+
+    #[test]
+    fn a_preheat_within_tolerance_counts_as_crossing_its_target() {
+        let mut stage = base_stage();
+        stage.kind = "preheat".into();
+        stage.temperature_c = 32.0;
+        stage.duration_secs = None;
+        stage.timer_added = None;
+        stage.probe_added = None;
+        stage.probe_target_c = None;
+        let mut status = base_status();
+        status.temperature_bulbs_mode = "dry".into();
+        status.temperature_c = 31.0;
+
+        let check = |tolerance, since: &mut Option<std::time::Instant>| {
+            evaluate_stage_completion(&stage, &status, since, &mut false, 0, &mut false, tolerance)
+        };
+        let mut since = None;
+        check(0.0, &mut since);
+        assert!(
+            since.is_none(),
+            "1 °C short isn't there without a tolerance"
+        );
+        check(1.1, &mut since);
+        assert!(since.is_some(), "but is within 2 °F");
     }
 
     // A stale Firestore currentCook must not build a tracker while the oven is
