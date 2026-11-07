@@ -2,7 +2,7 @@
 # The oven connects on 4443. A UniFi destination-NAT rule sends the oven's
 # port 443 here, because Home Assistant itself owns 443 on this host.
 name: Anova Oven
-version: "0.19.1"
+version: "0.19.2"
 slug: anova_oven
 description: Local control for the Anova Precision Oven v1, with no Anova cloud
 url: https://github.com/urosgruber/anova-oven-ha
