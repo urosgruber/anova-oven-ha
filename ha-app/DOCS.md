@@ -163,6 +163,15 @@ The cog opens the maintenance panel in the same space:
 During a cook, the slider and - and + change the running cook's
 temperature, and - and + change a running timer.
 
+## Log level
+
+The `log_level` option on the App's Configuration tab sets how much the
+App writes to its log. Use `info` (the default) for daily use. Use `debug`
+only to find a problem: the log then also has the oven's full message once
+a minute. That message has the oven's device ID and versions, so remove
+it before you share a log in public. Set the option back to `info` after
+the test.
+
 ## Data
 
 Recipes, history and the current cook are stored in the app's `/data`

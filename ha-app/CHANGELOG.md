@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.2
+
+- New option `log_level` (info or debug). With debug, the App log has
+  more detail, and the oven's full message once a minute. The default is
+  info, and then the oven's full message is not in the log.
+
 ## 0.17.1
 
 - While the oven is in a mode the App does not know (for example a
