@@ -155,7 +155,11 @@ The cog opens the maintenance panel in the same space:
 - Descale: shows if a descale is needed. Start it on the oven: fill the
   tank with descaler and water, press the descale symbol, then Start. The
   card cannot start a descale yet; the command is untested. During a
-  descale, the card shows "Descaling", and Bake is off. A descale is not a
+  descale, the card shows "Descaling" with about how many minutes are
+  left, and Bake is off. A descale takes about 48 minutes: the descale
+  (about 38 minutes), then "add clean water", a 9-minute rinse, and
+  "empty the drip tray" (under the door). The oven does not send its own
+  countdown, so the minutes are an estimate. A descale is not a
   cook: it sends no cook notifications, and the safety limit does not
   stop it.
 - Water tank: empty or OK.
