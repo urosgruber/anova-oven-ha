@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.1
+
+- While the oven is in a mode the App does not know (for example a
+  descale), the App log shows the oven's full message once a minute. This
+  helps to find the descale countdown that the oven shows on its display.
+
 ## 0.17.0
 
 - A descale is no longer a cook. Before, the card showed "Unknown" with a
