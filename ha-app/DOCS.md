@@ -154,7 +154,10 @@ The cog opens the maintenance panel in the same space:
   bottom 176 °C for 15 min, then a cool-down until you tap Stop.
 - Descale: shows if a descale is needed. Start it on the oven: fill the
   tank with descaler and water, press the descale symbol, then Start. The
-  card cannot start a descale yet; the command is untested.
+  card cannot start a descale yet; the command is untested. During a
+  descale, the card shows "Descaling", and Bake is off. A descale is not a
+  cook: it sends no cook notifications, and the safety limit does not
+  stop it.
 - Water tank: empty or OK.
 
 During a cook, the slider and - and + change the running cook's

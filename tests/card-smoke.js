@@ -55,6 +55,13 @@ check("probe end without the probe disables Start", /id="start"[^>]*disabled/.te
 h = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "2 of 3", "sensor.target_temperature": "200" });
 c.hass = h;
 check("cooking shows the running stages (1 done, 2 on)", html().includes("steps running") && html().includes("✓") && html().includes('chip-step on'));
+h = hass({ "sensor.mode": "Descaling", "binary_sensor.descale_required": "on" });
+h.states[`sensor.${P}_mode`].last_changed = "2026-11-07T07:34:04Z";
+c.hass = h;
+check("descale shows Descaling, not a cook", html().includes("Descaling since") && !html().includes("steps running") && !html().includes("Descale needed"));
+check("descale disables Start", /id="start"[^>]*disabled/.test(html()));
+const sent = h.calls.length; c._start();
+check("Start during a descale sends nothing", h.calls.length === sent);
 h = hass({ "binary_sensor.connected": "off" }); c.hass = h;
 check("offline renders", html().includes("Offline"));
 // A saved 0.7 setup migrates into one step.

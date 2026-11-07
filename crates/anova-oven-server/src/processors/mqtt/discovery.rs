@@ -361,7 +361,7 @@ fn entities(topics: &Topics, options: &[String]) -> Vec<Entity> {
             "cooking",
             "Cooking",
             Needs::Oven,
-            on_off(topics, "value_json.get('mode', 'idle') not in ['idle', 'unknown']", Some("running")),
+            on_off(topics, "value_json.get('mode', 'idle') not in ['idle', 'unknown', 'descale']", Some("running")),
         ),
         entity(
             "binary_sensor",
