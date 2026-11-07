@@ -145,6 +145,10 @@ fill) and the target (white mark); drag the mark or use - and + to change
 the target. - and + also change a running timer. "Skip to step N" ends
 the current step early; "Start step N" starts a step that waits for you.
 
+Tap the oven icon or the name in the header to open the oven's device
+page. Users who are not admins get the oven's info dialog instead,
+because they cannot open Settings.
+
 The header shows the door, the probe (orange while plugged in; its
 temperature is in the status line), the light, and a cog. An amber dot
 on the cog means a descale is needed or the water tank is empty. "End by
