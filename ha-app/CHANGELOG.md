@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.19.2
+
+- Fix: the "Visit" link on the device page did not open. It now opens
+  the App's page from the sidebar ("Oven (debug)").
+
 ## 0.19.1
 
 - Card: tap the oven icon or the name to open the oven's device page. A

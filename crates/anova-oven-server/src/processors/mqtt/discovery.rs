@@ -158,7 +158,7 @@ fn config(topics: &Topics, e: &Entity) -> Value {
         },
     });
     // The "Visit" link on the device page, for example the App's web page
-    // (`homeassistant://hassio/ingress/<slug>`); the HA app sets it.
+    // (`homeassistant://<slug>`, the sidebar page); the HA app sets it.
     if let Ok(url) = std::env::var("ANOVA_MQTT_CONFIGURATION_URL") {
         if !url.is_empty() {
             config["device"]["configuration_url"] = url.into();
