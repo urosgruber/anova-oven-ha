@@ -142,6 +142,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:hand-back-right-outline",
     "name": "Next stage ready",
     "origin": {
       "name": "anova-oven-server",
@@ -240,6 +241,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:skip-next",
     "name": "Next stage",
     "origin": {
       "name": "anova-oven-server",
@@ -269,6 +271,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:play",
     "name": "Start",
     "origin": {
       "name": "anova-oven-server",
@@ -298,6 +301,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:play-outline",
     "name": "Start manual cook",
     "origin": {
       "name": "anova-oven-server",
@@ -327,6 +331,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:stop",
     "name": "Stop",
     "origin": {
       "name": "anova-oven-server",
@@ -364,6 +369,7 @@
       "oven_fault"
     ],
     "has_entity_name": true,
+    "icon": "mdi:bell-ring-outline",
     "name": "Cook",
     "origin": {
       "name": "anova-oven-server",
@@ -456,6 +462,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:water-percent",
     "max": 100,
     "min": 0,
     "mode": "box",
@@ -521,6 +528,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:timer-outline",
     "max": 1440,
     "min": 1,
     "mode": "box",
@@ -595,6 +603,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:timer-outline",
     "max": 1440,
     "min": 1,
     "mode": "box",
@@ -788,6 +797,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:book-open-variant",
     "name": "Recipe",
     "options": [
       "Bread",
@@ -821,6 +831,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:chef-hat",
     "json_attributes_topic": "anova/oven/cook/attributes",
     "name": "Current recipe",
     "origin": {
@@ -880,6 +891,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:clipboard-text-outline",
     "json_attributes_template": "{{ {'problem': value_json.problem} | tojson }}",
     "json_attributes_topic": "anova/oven/manual",
     "name": "Manual cook",
@@ -912,6 +924,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:stove",
     "name": "Mode",
     "origin": {
       "name": "anova-oven-server",
@@ -1000,6 +1013,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:book-check-outline",
     "json_attributes_topic": "anova/oven/recipe/selected/attributes",
     "name": "Selected recipe",
     "origin": {
@@ -1030,6 +1044,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:stairs",
     "name": "Stage",
     "origin": {
       "name": "anova-oven-server",
@@ -1060,6 +1075,7 @@
       "name": "Anova Oven"
     },
     "has_entity_name": true,
+    "icon": "mdi:text-box-outline",
     "name": "Stage description",
     "origin": {
       "name": "anova-oven-server",

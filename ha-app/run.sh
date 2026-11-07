@@ -13,6 +13,8 @@ export ANOVA_SAFETY_LIMIT_HOURS="$(bashio::config 'safety_limit_hours' '4')"
 if [ "$(bashio::config 'log_level' 'info')" = "debug" ]; then
   export RUST_LOG="anova_oven_server=debug"
 fi
+# The "Visit" link on the HA device page opens this App's web page.
+export ANOVA_MQTT_CONFIGURATION_URL="homeassistant://hassio/ingress/$(bashio::addon.slug)"
 if [ -n "${TZ:-}" ]; then
   export ANOVA_TIMEZONE="${TZ}"
 fi

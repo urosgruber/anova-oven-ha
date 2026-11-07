@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.19.0";
+const CARD_VERSION = "0.19.1";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -168,6 +168,23 @@ class AnovaOvenCard extends HTMLElement {
 
   _id(domain, name) {
     return `${domain}.${this._config.prefix}_${name}`;
+  }
+
+  _isAdmin() {
+    return !!(this._hass && this._hass.user && this._hass.user.is_admin);
+  }
+
+  // Like a tile card's icon: an admin goes to the device page. Other users
+  // cannot open Settings, so they get the oven's more-info dialog.
+  _openDevice() {
+    const id = this._id("sensor", "mode");
+    const deviceId = this._hass && this._hass.entities && this._hass.entities[id]?.device_id;
+    if (this._isAdmin() && deviceId) {
+      history.pushState(null, "", `/config/devices/device/${deviceId}`);
+      window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } }));
+      return;
+    }
+    this.dispatchEvent(new CustomEvent("hass-more-info", { detail: { entityId: id }, bubbles: true, composed: true }));
   }
 
   _state(domain, name) {
@@ -507,8 +524,8 @@ class AnovaOvenCard extends HTMLElement {
       <style>${STYLE}</style>
       <ha-card class="${tone} ${this._wide ? "wide" : ""}">
         <div class="header">
-          <div class="shape"><ha-icon icon="${live ? "mdi:stove" : "mdi:toaster-oven"}"></ha-icon></div>
-          <div class="info">
+          <div class="shape link" id="open-device" role="button" tabindex="0" title="${this._isAdmin() ? "Open the oven's device page" : "Oven details"}"><ha-icon icon="${live ? "mdi:stove" : "mdi:toaster-oven"}"></ha-icon></div>
+          <div class="info link" id="open-device-name">
             <div class="primary">${esc(this._config.title || "Oven")}</div>
             <div class="secondary ${warning ? "warn" : ""}" id="secondary">${statusLine(m, warning)}</div>
           </div>
@@ -758,6 +775,7 @@ class AnovaOvenCard extends HTMLElement {
   _bind(m, temp) {
     const root = this.shadowRoot;
     const $ = (id) => root.getElementById(id);
+    for (const id of ["open-device", "open-device-name"]) if ($(id)) $(id).onclick = () => this._openDevice();
     if ($("lamp")) $("lamp").onclick = () => this._toggleLamp();
     if ($("stop")) $("stop").onclick = () => this._stop();
     if ($("start")) $("start").onclick = () => this._start();
@@ -1415,6 +1433,7 @@ const STYLE = `
     background: rgba(var(--tone-rgb), .2); color: rgb(var(--tone-rgb)); }
   .shape ha-icon { --mdc-icon-size: 20px; }
   .info { flex: 1; min-width: 0; }
+  .link { cursor: pointer; }
   .primary { font-size: 14px; font-weight: 500; line-height: 20px; color: var(--primary-text-color); }
   .secondary { font-size: 12px; line-height: 16px; color: var(--secondary-text-color);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }

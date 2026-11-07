@@ -157,12 +157,44 @@ fn config(topics: &Topics, e: &Entity) -> Value {
             "sw_version": env!("CARGO_PKG_VERSION"),
         },
     });
+    // The "Visit" link on the device page, for example the App's web page
+    // (`homeassistant://hassio/ingress/<slug>`); the HA app sets it.
+    if let Ok(url) = std::env::var("ANOVA_MQTT_CONFIGURATION_URL") {
+        if !url.is_empty() {
+            config["device"]["configuration_url"] = url.into();
+        }
+    }
     let map = config.as_object_mut().expect("an object");
     for (k, v) in e.fields.as_object().expect("an object") {
         map.insert(k.clone(), v.clone());
     }
+    if let Some((_, icon)) = ICONS.iter().find(|(object, _)| *object == e.object) {
+        map.entry("icon").or_insert_with(|| (*icon).into());
+    }
     config
 }
+
+/// Icons for entities that have neither an icon nor a device class, so the
+/// device page does not show HA's generic one. Kept apart from the entity
+/// list, so upstream changes to that list merge cleanly.
+const ICONS: &[(&str, &str)] = &[
+    ("current_recipe", "mdi:chef-hat"),
+    ("selected_recipe", "mdi:book-check-outline"),
+    ("recipe", "mdi:book-open-variant"),
+    ("mode", "mdi:stove"),
+    ("stage", "mdi:stairs"),
+    ("stage_description", "mdi:text-box-outline"),
+    ("next_stage_ready", "mdi:hand-back-right-outline"),
+    ("start", "mdi:play"),
+    ("stop", "mdi:stop"),
+    ("next_stage", "mdi:skip-next"),
+    ("set_timer", "mdi:timer-outline"),
+    ("cook", "mdi:bell-ring-outline"),
+    ("manual_cook", "mdi:clipboard-text-outline"),
+    ("start_manual", "mdi:play-outline"),
+    ("manual_timer", "mdi:timer-outline"),
+    ("manual_steam", "mdi:water-percent"),
+];
 
 /// A sensor reading `field` from the state JSON, unknown when it's null or
 /// absent.

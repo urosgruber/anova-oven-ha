@@ -66,6 +66,17 @@ check("descale is not a cook", !html().includes("steps running") && !html().incl
 check("descale disables Start", /id="start"[^>]*disabled/.test(html()));
 const sent = h.calls.length; c._start();
 check("Start during a descale sends nothing", h.calls.length === sent);
+// The header opens the device page for an admin, more-info for others.
+global.history = { pushState: (_, __, url) => { global.lastUrl = url; } };
+global.window.dispatchEvent = () => {};
+global.CustomEvent = class { constructor(type, o) { this.type = type; this.detail = o && o.detail; } };
+const events = []; c.dispatchEvent = (e) => events.push(e);
+h = hass(); h.user = { is_admin: true }; h.entities = { [`sensor.${P}_mode`]: { device_id: "dev1" } }; c.hass = h;
+c._openDevice();
+check("admin: the header opens the device page", global.lastUrl === "/config/devices/device/dev1" && events.length === 0);
+h = hass(); h.user = { is_admin: false }; h.entities = { [`sensor.${P}_mode`]: { device_id: "dev1" } }; c.hass = h;
+c._openDevice();
+check("non-admin: the header opens more-info", events.at(-1)?.type === "hass-more-info" && events.at(-1).detail.entityId === `sensor.${P}_mode`);
 h = hass({ "binary_sensor.problem": "on" });
 h.states[`binary_sensor.${P}_problem`].attributes = { faults: ["triacs_failed", "fan_failed"] };
 c.hass = h;

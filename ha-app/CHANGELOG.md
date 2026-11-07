@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.19.1
+
+- Card: tap the oven icon or the name to open the oven's device page. A
+  user who is not an admin cannot open Settings, so that user gets the
+  oven's info dialog instead.
+- Device page: a "Visit" link opens the App's web page.
+- Device page: entities that showed HA's generic icon now have their own
+  icons.
+
 ## 0.19.0
 
 The server now follows the new upstream version, which has a license
