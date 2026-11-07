@@ -117,6 +117,49 @@ The card never cuts power during a cook:
   then on. This often brings the oven back on the Wi-Fi. Keep the page
   open for those 10 seconds: the card switches the plug back on.
 
+### Emergency power cut
+
+The App can turn the plug off when it cannot stop the oven in a normal
+way. It always asks first. A cut is the last resort: it never replaces a
+normal stop.
+
+Set the plug on the App's Configuration tab (the card's settings are
+separate):
+
+- `power_switch`: the plug's switch, for example `switch.oven_plug`.
+  Empty means no emergency power cut.
+- `power_sensor`: the plug's power sensor, for example
+  `sensor.oven_plug_power`. Optional, but recommended.
+- `power_cut_minutes`: how long the App waits for an answer before it
+  turns the plug off by itself. The default is 60. `0` means the App
+  never turns the plug off by itself; it only asks.
+
+The `notify` option must be on. The alarm starts in two cases:
+
+- Auto stop or the safety limit cannot stop the oven. The alarm starts
+  at once.
+- The oven goes offline during a cook. The App waits 5 minutes first, so
+  a short Wi-Fi drop wakes nobody. The alarm starts only if the plug
+  reads more than 20 W, which means the oven heats. With no power
+  sensor, the App assumes the oven heats.
+
+Everyone gets the alarm, with two buttons:
+
+- "Turn off power": the App turns the plug off at once. On an iPhone,
+  you must unlock the phone first.
+- "I am here": the alarm ends. You control the oven yourself. No new
+  alarm starts until the oven is idle again.
+
+If nobody answers in `power_cut_minutes`, and the oven still heats, the
+App turns the plug off. The alarm ends by itself when the oven is back
+online, when the oven stops, or when somebody turns the plug off. Every
+notification about the alarm replaces the one before it on every phone,
+so everyone sees what happened. After a cut, the plug stays off. Turn it
+on again from the card when the oven is safe.
+
+The alarm needs Home Assistant and the App. If Home Assistant is down,
+no alarm comes. A restart of the App forgets a running alarm.
+
 The card follows Home Assistant's tile card. Under the header (oven state,
 door, light) it always shows the same six rows, so it never changes size:
 
