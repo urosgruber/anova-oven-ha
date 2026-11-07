@@ -183,6 +183,176 @@ class NotifyHandle(unittest.TestCase):
         self.assertEqual(hass.sent, [])
 
 
+class GuardHass(FakeHass):
+    """FakeHass with the oven's sensors, a plug, and service calls kept whole."""
+
+    def __init__(self, connected="off", cooking="on", plug="on", watts="1800"):
+        super().__init__(**FAMILY)
+        self.states[0]["attributes"]["friendly_name"] = "Me"
+        self.values = {notify.CONNECTED: connected, notify.COOKING: cooking,
+                       "switch.oven_plug": plug, "sensor.oven_plug_power": watts}
+        self.calls = []
+
+    def set(self, entity, value):
+        self.values[entity] = value
+
+    def call(self, payload):
+        if payload["type"] == "get_states":
+            extra = [{"entity_id": e, "state": v, "attributes": {}} for e, v in self.values.items()]
+            return {"success": True, "result": self.states + extra}
+        if payload["type"] == "call_service":
+            self.calls.append(payload)
+            if payload["domain"] == "switch" and payload["service"] == "turn_off":
+                self.values[payload["service_data"]["entity_id"]] = "off"
+            return {"success": True}
+        return super().call(payload)
+
+    def notes(self):
+        return [c["service_data"]["message"] for c in self.calls if c["domain"] == "notify"
+                and c["service"] == "mobile_app_my_phone"]
+
+    def cuts(self):
+        return [c for c in self.calls if c["domain"] == "switch"]
+
+
+class Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def guard(clock, minutes=60):
+    return notify.Guard("switch.oven_plug", "sensor.oven_plug_power", minutes, now=clock)
+
+
+def action(name, nonce, user="user-me"):
+    return {"type": "event", "event": {"event_type": notify.ACTION_EVENT,
+                                       "data": {"action": f"{name}_{nonce}"},
+                                       "context": {"user_id": user}}}
+
+
+class NotifyGuard(unittest.TestCase):
+    STOP_FAILED = {"event_type": "command_failed", "command": "safety_limit", "reason": "timeout"}
+
+    def test_a_failed_stop_alarms_everyone_with_buttons(self):
+        hass, clock = GuardHass(connected="on"), Clock()
+        g = guard(clock)
+        self.assertEqual(notify.handle(hass, trigger(self.STOP_FAILED), g), [])
+        notes = [c for c in hass.calls if c["domain"] == "notify"]
+        self.assertEqual(sorted(c["service"] for c in notes), ["mobile_app_moms_phone", "mobile_app_my_phone"])
+        data = notes[0]["service_data"]["data"]
+        self.assertEqual([a["title"] for a in data["actions"]], ["Turn off power", "I am here"])
+        self.assertTrue(data["actions"][0]["authenticationRequired"])
+        self.assertIn("in 60 min", notes[0]["service_data"]["message"])
+
+    def test_nobody_answers_so_the_power_goes_off(self):
+        hass, clock = GuardHass(connected="on"), Clock()
+        g = guard(clock)
+        notify.handle(hass, trigger(self.STOP_FAILED), g)
+        clock.t += 59 * 60
+        g.tick(hass, force=True)
+        self.assertEqual(hass.cuts(), [])
+        clock.t += 60
+        g.tick(hass, force=True)
+        self.assertEqual(hass.cuts()[0]["service_data"], {"entity_id": "switch.oven_plug"})
+        self.assertIn("Nobody answered in 60 min", hass.notes()[-1])
+
+    def test_zero_minutes_never_cuts_by_itself(self):
+        hass, clock = GuardHass(connected="on"), Clock()
+        g = guard(clock, minutes=0)
+        notify.handle(hass, trigger(self.STOP_FAILED), g)
+        self.assertNotIn("min, the App", hass.notes()[0])
+        clock.t += 24 * 3600
+        g.tick(hass, force=True)
+        self.assertEqual(hass.cuts(), [])
+
+    def test_turn_off_power_cuts_at_once_and_tells_the_others(self):
+        hass, clock = GuardHass(connected="on"), Clock()
+        g = guard(clock)
+        notify.handle(hass, trigger(self.STOP_FAILED), g)
+        nonce = g.alarm["nonce"]
+        notify.handle(hass, action(notify.POWER_OFF, nonce), g)
+        self.assertEqual(len(hass.cuts()), 1)
+        self.assertIn("Me tapped Turn off power", hass.notes()[-1])
+        notify.handle(hass, action(notify.POWER_OFF, nonce), g)
+        self.assertEqual(len(hass.cuts()), 1, "a second tap on an old button does nothing")
+
+    def test_i_am_here_ends_the_alarm_until_the_oven_is_idle(self):
+        hass, clock = GuardHass(connected="on"), Clock()
+        g = guard(clock)
+        notify.handle(hass, trigger(self.STOP_FAILED), g)
+        notify.handle(hass, action(notify.HERE, g.alarm["nonce"]), g)
+        self.assertIn("Me is at the oven", hass.notes()[-1])
+        clock.t += 2 * 3600
+        g.tick(hass, force=True)
+        notify.handle(hass, trigger(self.STOP_FAILED), g)
+        self.assertEqual(hass.cuts(), [])
+        self.assertIsNone(g.alarm, "the safety limit's next try starts no new alarm")
+        hass.set(notify.COOKING, "off")
+        g.tick(hass, force=True)
+        notify.handle(hass, trigger(self.STOP_FAILED), g)
+        self.assertIsNotNone(g.alarm, "after the oven was idle, a new alarm can start")
+
+    def test_a_short_drop_wakes_nobody(self):
+        hass, clock = GuardHass(), Clock()
+        g = guard(clock)
+        notify.handle(hass, trigger({"event_type": "oven_lost"}), g)
+        clock.t += 4 * 60
+        g.tick(hass, force=True)
+        hass.set(notify.CONNECTED, "on")
+        clock.t += 2 * 60
+        g.tick(hass, force=True)
+        self.assertEqual(hass.calls, [])
+        self.assertIsNone(g.alarm)
+
+    def test_a_lost_oven_that_heats_alarms_after_the_grace(self):
+        hass, clock = GuardHass(), Clock()
+        g = guard(clock)
+        notify.handle(hass, trigger({"event_type": "oven_lost"}), g)
+        clock.t += notify.LOST_GRACE
+        g.tick(hass, force=True)
+        self.assertIn("lost contact", hass.notes()[0])
+        self.assertIn("1800 W", hass.notes()[0])
+        hass.set(notify.CONNECTED, "on")
+        g.tick(hass, force=True)
+        self.assertIn("back online", hass.notes()[-1])
+        self.assertIsNone(g.alarm)
+
+    def test_a_lost_oven_at_idle_power_waits(self):
+        hass, clock = GuardHass(watts="1"), Clock()
+        g = guard(clock)
+        notify.handle(hass, trigger({"event_type": "oven_lost"}), g)
+        clock.t += 3 * 3600
+        g.tick(hass, force=True)
+        self.assertEqual(hass.calls, [])
+
+    def test_the_plug_turned_off_by_hand_ends_the_alarm(self):
+        hass, clock = GuardHass(connected="on"), Clock()
+        g = guard(clock)
+        notify.handle(hass, trigger(self.STOP_FAILED), g)
+        hass.set("switch.oven_plug", "off")
+        g.tick(hass, force=True)
+        self.assertIsNone(g.alarm)
+        self.assertIn("power is off", hass.notes()[-1])
+
+    def test_without_a_plug_the_plain_notification_stays(self):
+        hass = FakeHass(**FAMILY)
+        sent = notify.handle(hass, trigger(self.STOP_FAILED), None)
+        self.assertEqual(sent, ["mobile_app_moms_phone", "mobile_app_my_phone"])
+
+    def test_settings_from_run_sh(self):
+        for env, expected in [({}, None), ({"ANOVA_POWER_SWITCH": ""}, None),
+                              ({"ANOVA_POWER_SWITCH": "light.oven"}, None),
+                              ({"ANOVA_POWER_SWITCH": "switch.oven_plug", "ANOVA_POWER_CUT_MINUTES": "90"}, 5400),
+                              ({"ANOVA_POWER_SWITCH": "switch.oven_plug", "ANOVA_POWER_CUT_MINUTES": "0"}, 0)]:
+            g = notify.Guard.from_env(env)
+            self.assertEqual(g.cut_secs if g else None, expected, env)
+        g = notify.Guard.from_env({"ANOVA_POWER_SWITCH": "switch.p", "ANOVA_POWER_SENSOR": "switch.x"})
+        self.assertIsNone(g.sensor)
+
+
 # --- register_card.py --------------------------------------------------------
 
 class FakeSocket:

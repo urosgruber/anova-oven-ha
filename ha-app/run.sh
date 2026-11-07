@@ -44,6 +44,13 @@ fi
 # must not stop the server.
 python3 /register_card.py || bashio::log.warning "Could not install the dashboard card"
 
+# Emergency power cut through a smart plug (notify.py): the plug's switch
+# and power sensor, and the minutes with no answer before the App turns
+# the plug off by itself (0: never by itself).
+export ANOVA_POWER_SWITCH="$(bashio::config 'power_switch' '')"
+export ANOVA_POWER_SENSOR="$(bashio::config 'power_sensor' '')"
+export ANOVA_POWER_CUT_MINUTES="$(bashio::config 'power_cut_minutes' '60')"
+
 # Send the oven's events to phones. It runs beside the server; if it ends,
 # it starts again after 15 s.
 if bashio::config.true 'notify'; then

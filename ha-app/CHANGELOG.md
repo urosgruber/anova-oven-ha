@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.21.0
+
+- Emergency power cut through a smart plug. Set `power_switch` (and
+  `power_sensor`) on the App's Configuration tab. When the App cannot
+  stop the oven, or loses the oven during a cook while it heats, everyone
+  gets an alarm with "Turn off power" and "I am here". If nobody answers
+  in `power_cut_minutes` (default 60, 0 = never), the App turns the plug
+  off. See "Emergency power cut" in the docs.
+
 ## 0.20.0
 
 - Card: start or abort a descale from the maintenance panel (cog). The

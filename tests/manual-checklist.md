@@ -26,6 +26,20 @@ Do these tests when the case happens in normal use.
 | Descale from the card (0.20.0) | The oven asks for a descale. Fill the tank with descaler and water, then tap Start twice in the cog panel. | The oven starts its descale program. Abort (two taps) stops it. If not, the App log shows the oven's answer (set `log_level: debug` first). | |
 | Descale | The oven asks for a descale and you run it. | The card shows "Descaling" and the time left. Start is disabled. No cook notifications. "Descale needed" goes away at the end. | |
 
+## Emergency power cut (0.21.0)
+
+Set `power_switch`, `power_sensor` and `power_cut_minutes` first. For a
+quick test, set `power_cut_minutes` to 2.
+
+| Test | What to do | Expected result | Passed |
+|---|---|---|---|
+| Power comes back | Oven idle: turn the plug off, then on. | Note what the oven display shows. | |
+| Alarm on a lost oven | Start a short bake. Block the oven's network in the router for 6 minutes. Do not stop the App: the alarm runs inside it. | After 5 minutes: an alarm on every phone with two buttons. | |
+| I am here | Tap "I am here" on the alarm. | Every phone shows "… is at the oven". No cut. | |
+| Turn off power | Repeat the alarm. Tap "Turn off power". | The plug goes off. Every phone shows who turned it off. | |
+| No answer | Repeat the alarm. Do not answer. | After `power_cut_minutes`, the plug goes off and every phone gets a message. | |
+| Short drop | The oven loses Wi-Fi for less than 5 minutes during a cook. | No alarm. | |
+
 ## Tests that passed
 
 | Test | App version |
@@ -38,4 +52,4 @@ Do these tests when the case happens in normal use.
 
 ## Backlog (not built yet)
 
-- Emergency stop through the Shelly plug. The plan is ready; it waits for your decisions.
+- Shelly script as a last guard when HA is down (step 6).

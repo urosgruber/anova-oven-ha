@@ -9,16 +9,25 @@ so its events go to everyone.
 A person's phones are the Companion app's notify services that belong to
 their device trackers: device_tracker.<name> -> notify.mobile_app_<name>.
 
+With a smart plug set in the App options (power_switch), a failed stop
+or a lost oven during a cook starts an alarm (see Guard): a notification
+to everyone with "Turn off power" and "I am here". If nobody answers in
+power_cut_minutes, the App turns the plug off.
+
 Runs for as long as the app runs; run.sh starts it again if it ends.
 """
 import json
 import os
 import sys
+import time
+import uuid
 
 import websocket
 
 EVENT_ENTITY = "event.anova_oven_cook"
 AUTO_STOP = "switch.anova_oven_auto_stop"
+CONNECTED = "binary_sensor.anova_oven_connected"
+COOKING = "binary_sensor.anova_oven_cooking"
 
 
 def log(msg):
@@ -52,6 +61,8 @@ class Hass:
             self.pending.append(msg)
 
     def receive(self):
+        """The next message. With a timeout set on the socket, it can raise
+        websocket.WebSocketTimeoutException."""
         if self.pending:
             return self.pending.pop(0)
         return json.loads(self.ws.recv())
@@ -161,9 +172,14 @@ QUIET = {"cook_started", "command_failed"}
 STOPS = {"auto_stop", "safety_limit"}
 
 
-def handle(hass, msg):
+def handle(hass, msg, guard=None):
     """Notify for one websocket message; return the services it went to."""
     if msg.get("type") != "event":
+        return []
+    event = msg.get("event") or {}
+    if event.get("event_type") == ACTION_EVENT:
+        if guard:
+            guard.on_action(hass, event)
         return []
     trigger = (msg.get("event") or {}).get("variables", {}).get("trigger") or {}
     old, new = trigger.get("from_state"), trigger.get("to_state")
@@ -173,6 +189,8 @@ def handle(hass, msg):
             or old.get("state") in ("unavailable", "unknown"):
         return []
     attributes = new.get("attributes") or {}
+    if guard and guard.takes(hass, attributes):
+        return []
     text = message(hass, attributes)
     if not text:
         return []
@@ -190,15 +208,217 @@ def handle(hass, msg):
     return sent
 
 
+# --- Emergency power cut -------------------------------------------------
+
+ACTION_EVENT = "mobile_app_notification_action"
+POWER_OFF = "ANOVA_POWER_OFF"
+HERE = "ANOVA_HERE"
+TAG = "anova-oven-power"
+# The plug reads at most this when the oven does not heat (idle: about 1 W).
+IDLE_W = 20
+# A lost oven gets this long to come back before the alarm. A short Wi-Fi
+# drop must not wake everyone.
+LOST_GRACE = 5 * 60
+# How often the alarm checks the oven and the plug.
+TICK = 30
+
+
+class Guard:
+    """The alarm for an oven that the App cannot stop.
+
+    It starts on a failed stop (Auto stop or the safety limit) or when the
+    oven goes offline during a cook. A lost oven gets LOST_GRACE first.
+    Then everyone gets a notification with two buttons:
+
+    - "Turn off power" turns the plug off at once.
+    - "I am here" ends the alarm. No new alarm starts until the oven is
+      idle again.
+
+    If nobody answers in cut_secs, and the plug still reads more than
+    IDLE_W (or reads nothing), the App turns the plug off. cut_secs 0
+    means: notify only, never turn off by itself. The alarm ends by itself
+    when the oven is back (online, or stopped) or the plug is off. Every
+    notification has the same tag, so the last one replaces the others
+    on every phone, and only the newest buttons work.
+    """
+
+    def __init__(self, switch, sensor=None, cut_minutes=60, now=time.time):
+        self.switch = switch
+        self.sensor = sensor
+        self.cut_secs = max(0, int(cut_minutes * 60))
+        self.now = now
+        self.alarm = None
+        self.muted = False
+        self.last_tick = 0
+
+    @classmethod
+    def from_env(cls, env=os.environ):
+        """The guard from run.sh's ANOVA_POWER_* variables, or None with no plug."""
+        switch = (env.get("ANOVA_POWER_SWITCH") or "").strip()
+        if not switch:
+            return None
+        if not switch.startswith("switch."):
+            log(f"power_switch must be a switch entity, not {switch}; no emergency power cut")
+            return None
+        sensor = (env.get("ANOVA_POWER_SENSOR") or "").strip() or None
+        if sensor and not sensor.startswith("sensor."):
+            log(f"power_sensor must be a sensor entity, not {sensor}; the App ignores it")
+            sensor = None
+        try:
+            minutes = float(env.get("ANOVA_POWER_CUT_MINUTES") or 60)
+        except ValueError:
+            minutes = 60
+        return cls(switch, sensor, minutes)
+
+    def takes(self, hass, attributes):
+        """Whether this event belongs to the alarm instead of a plain notification."""
+        kind = attributes.get("event_type")
+        if kind == "oven_lost":
+            why = "lost"
+        elif kind == "command_failed" and attributes.get("command") in STOPS:
+            why = "stop_failed"
+        else:
+            return False
+        if self.muted or self.alarm:
+            return True
+        self.alarm = {"why": why, "since": self.now(), "sent": None,
+                      "nonce": uuid.uuid4().hex[:8], "title": attributes.get("recipe_title") or "Oven",
+                      "reason": attributes.get("reason")}
+        log(f"alarm: {why}")
+        if why == "stop_failed":
+            self._send_alarm(hass)
+        return True
+
+    def tick(self, hass, force=False):
+        if not force and self.now() - self.last_tick < TICK:
+            return
+        self.last_tick = self.now()
+        if not self.alarm and not self.muted:
+            return
+        states = {s["entity_id"]: s for s in hass.call({"type": "get_states"}).get("result") or []}
+        state = lambda e: (states.get(e) or {}).get("state")
+        connected, cooking = state(CONNECTED) == "on", state(COOKING) == "on"
+        if self.muted and connected and not cooking:
+            self.muted = False
+        if not self.alarm:
+            return
+        why = self.alarm["why"]
+        if state(self.switch) == "off":
+            return self._end(hass, "The oven's power is off.")
+        if why == "lost" and connected:
+            return self._end(hass, "The oven is back online. No action needed.")
+        if why == "stop_failed" and connected and not cooking:
+            return self._end(hass, "The oven stopped. No action needed.")
+        try:
+            watts = float(state(self.sensor)) if self.sensor else None
+        except (TypeError, ValueError):
+            watts = None
+        heating = watts is None or watts > IDLE_W
+        if self.alarm["sent"] is None:
+            if self.now() - self.alarm["since"] >= LOST_GRACE and heating:
+                self._send_alarm(hass, watts)
+            return
+        if self.cut_secs and self.now() - self.alarm["sent"] >= self.cut_secs and heating:
+            self._cut(hass, f"Nobody answered in {self.cut_secs // 60} min, so the App")
+
+    def on_action(self, hass, event):
+        action = (event.get("data") or {}).get("action") or ""
+        if not action.startswith(("ANOVA_",)):
+            return
+        if not self.alarm or not action.endswith("_" + self.alarm["nonce"]):
+            log(f"old button {action}: no alarm for it")
+            return
+        who = person_name(hass, (event.get("context") or {}).get("user_id"))
+        if action.startswith(POWER_OFF):
+            self._cut(hass, f"{who} tapped Turn off power. The App")
+        elif action.startswith(HERE):
+            self.alarm = None
+            self.muted = True
+            self._notify(hass, f"{who} is at the oven. The App does not turn the power off.")
+
+    def _send_alarm(self, hass, watts=None):
+        a = self.alarm
+        a["sent"] = self.now()
+        power = f" The plug reads {watts:.0f} W." if watts is not None else ""
+        if a["why"] == "lost":
+            text = f"The App lost contact with the oven during a cook.{power}"
+        else:
+            text = f"The App could not stop the oven ({a['reason'] or 'no reason'}).{power}"
+        if self.cut_secs:
+            text += f" If nobody answers in {self.cut_secs // 60} min, the App turns the power off."
+        actions = [
+            {"action": f"{POWER_OFF}_{a['nonce']}", "title": "Turn off power",
+             "destructive": True, "authenticationRequired": True},
+            {"action": f"{HERE}_{a['nonce']}", "title": "I am here"},
+        ]
+        self._notify(hass, text, actions)
+
+    def _cut(self, hass, by):
+        reply = hass.call({"type": "call_service", "domain": "switch", "service": "turn_off",
+                           "service_data": {"entity_id": self.switch}})
+        self.alarm = None
+        self.muted = True
+        if reply.get("success"):
+            log(f"power cut: {by}")
+            self._notify(hass, f"{by} turned the oven's power off. Check the oven. "
+                               "Turn the power on again from the card.")
+        else:
+            log(f"power cut failed: {reply}")
+            self._notify(hass, f"{by} could not turn the oven's power off. "
+                               "Turn the oven off yourself.")
+
+    def _end(self, hass, text):
+        sent = self.alarm["sent"]
+        self.alarm = None
+        log(f"alarm ended: {text}")
+        if sent is not None:
+            self._notify(hass, text)
+
+    def _notify(self, hass, text, actions=None):
+        data = {"group": "anova-oven", "tag": TAG}
+        if actions:
+            data.update({"actions": actions, "priority": "high", "ttl": 0,
+                         "push": {"interruption-level": "time-sensitive"}})
+        for service in targets(hass, None):
+            reply = hass.call({
+                "type": "call_service", "domain": "notify", "service": service,
+                "service_data": {"title": "Oven power", "message": text, "data": data},
+            })
+            log(f"power -> {service}: {'sent' if reply.get('success') else reply}")
+
+
+def person_name(hass, user_id):
+    """The person's name for an HA user, for the other phones to read."""
+    if user_id:
+        for s in hass.call({"type": "get_states"}).get("result") or []:
+            if s["entity_id"].startswith("person.") and s["attributes"].get("user_id") == user_id:
+                return s["attributes"].get("friendly_name") or s["entity_id"].split(".", 1)[1]
+    return "Someone"
+
+
 def main():
     hass = Hass()
     hass.call({
         "type": "subscribe_trigger",
         "trigger": {"platform": "state", "entity_id": EVENT_ENTITY},
     })
+    guard = Guard.from_env()
+    if guard:
+        hass.call({"type": "subscribe_events", "event_type": ACTION_EVENT})
+        # Wake up now and then to check the alarm, also with no events.
+        hass.ws.settimeout(TICK)
+        log(f"emergency power cut on {guard.switch}, after {guard.cut_secs // 60} min "
+            f"with no answer (0: never by itself)")
     log("watching the oven's events")
     while True:
-        handle(hass, hass.receive())
+        try:
+            msg = hass.receive()
+        except websocket.WebSocketTimeoutException:
+            msg = None
+        if msg:
+            handle(hass, msg, guard)
+        if guard:
+            guard.tick(hass)
 
 
 if __name__ == "__main__":

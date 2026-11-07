@@ -2,7 +2,7 @@
 # The oven connects on 4443. A UniFi destination-NAT rule sends the oven's
 # port 443 here, because Home Assistant itself owns 443 on this host.
 name: Anova Oven
-version: "0.20.0"
+version: "0.21.0"
 slug: anova_oven
 description: Local control for the Anova Precision Oven v1, with no Anova cloud
 url: https://github.com/urosgruber/anova-oven-ha
@@ -38,9 +38,15 @@ options:
   mqtt: true
   notify: true
   safety_limit_hours: 4
+  power_switch: ""
+  power_sensor: ""
+  power_cut_minutes: 60
   log_level: info
 schema:
   mqtt: bool
   notify: bool
   safety_limit_hours: float(0,48)
+  power_switch: str?
+  power_sensor: str?
+  power_cut_minutes: int(0,1440)
   log_level: list(info|debug)
