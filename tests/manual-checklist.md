@@ -23,6 +23,7 @@ Do these tests when the case happens in normal use.
 | Probe end | A cook ends when the probe reaches its temperature. | The card shows the probe temperature. The cook ends and you get the "done" notification. | |
 | Oven fault | The oven reports a fault flag. | The Problem sensor turns on. The card shows "Oven fault: …". All users get the fault notification one time. | |
 | Wet bulb is dry | The wet bulb sensor has no water. | The card shows "Wet bulb is dry: the temperature may be wrong". | |
+| Descale from the card (0.20.0) | The oven asks for a descale. Fill the tank with descaler and water, then tap Start twice in the cog panel. | The oven starts its descale program. Abort (two taps) stops it. If not, the App log shows the oven's answer (set `log_level: debug` first). | |
 | Descale | The oven asks for a descale and you run it. | The card shows "Descaling" and the time left. Start is disabled. No cook notifications. "Descale needed" goes away at the end. | |
 
 ## Tests that passed
@@ -38,4 +39,4 @@ Do these tests when the case happens in normal use.
 ## Backlog (not built yet)
 
 - Emergency stop through the Shelly plug.
-- Descale from the card. The command exists, but nobody has tested it.
+- Emergency stop: the plan is ready; it waits for your decisions.
