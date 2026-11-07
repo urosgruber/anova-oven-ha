@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.17.3";
+const CARD_VERSION = "0.18.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -49,7 +49,7 @@ const WATCHED = [
   "binary_sensor.water_tank_empty", "binary_sensor.descale_required", "light.lamp", "event.cook",
   "sensor.mode", "sensor.temperature", "sensor.target_temperature", "sensor.probe_temperature", "sensor.steam",
   "sensor.stage_ends_at", "sensor.stage", "sensor.stage_description", "sensor.current_recipe", "number.set_timer",
-  "sensor.recipes", "switch.auto_stop", "sensor.wet_bulb_temperature",
+  "sensor.recipes", "switch.auto_stop", "sensor.wet_bulb_temperature", "binary_sensor.problem",
 ];
 
 // The oven runs any one or two of its three elements.
@@ -457,6 +457,11 @@ class AnovaOvenCard extends HTMLElement {
       door: this._on("binary_sensor", "door"),
       lamp: this._on("light", "lamp"),
       waterEmpty: this._on("binary_sensor", "water_tank_empty"),
+      // Faults the oven reports (App 0.18.0+), by the server's names.
+      faults: this._on("binary_sensor", "problem")
+        ? ((this._state("binary_sensor", "problem") || {}).attributes?.faults || ["unknown"]) : [],
+      // The oven could not wet the wet bulb: sous vide readings are wrong.
+      doseFailed: last.wet_bulb_dose_failed === true,
       // null while the sensor is unavailable, for example with the oven offline.
       descale: this._value("binary_sensor", "descale_required") === null ? null : this._on("binary_sensor", "descale_required"),
     };
@@ -1192,12 +1197,24 @@ function fmtTemp(v, unit = "°") {
   return `${Number.isInteger(v) ? v : v.toFixed(1)}${unit}`;
 }
 
+// The server's fault names (see protocol::faults), short for the header.
+const FAULT_TEXT = {
+  triacs_failed: "element switch failed", top_element_failed: "top element failed",
+  bottom_element_failed: "bottom element failed", rear_element_failed: "rear element failed",
+  fan_failed: "fan failed", boiler_failed: "boiler failed", boiler_overheated: "boiler overheated",
+  evaporator_failed: "evaporator failed", evaporator_overheated: "evaporator overheated",
+  top_overheated: "top overheated", bottom_overheated: "bottom overheated",
+  lamp_failed: "lamp failed", display_link_failed: "display link lost",
+};
+
 function warningText(m) {
   if (!m.appUp) return "The Anova app in Home Assistant is not running";
   if (!m.connected && m.plug === "off") return "Power off";
   if (!m.connected && m.wasCooking && m.offlineSince) return `Offline since ${hhmm(m.offlineSince)}`;
   if (!m.connected) return m.plug === "on" ? "Offline: check the oven's Wi-Fi" : "Offline: check the oven's power and Wi-Fi";
+  if (m.faults.length) return `Oven fault: ${FAULT_TEXT[m.faults[0]] || m.faults[0]}${m.faults.length > 1 ? ` (+${m.faults.length - 1})` : ""}`;
   if (m.waterEmpty) return "Water tank empty";
+  if (m.cooking && m.wet && m.doseFailed) return "Wet bulb is dry: the temperature may be wrong";
   if (m.cooking && m.door) return "Door open";
   if (m.descale && !m.descaling) return "Descale needed";
   return "";

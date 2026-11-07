@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.18.0
+
+- New: the App reads the oven's fault flags. Before, it ignored them. A
+  failed heating element, triac, fan, boiler, evaporator or lamp, an
+  overheated part, or a lost link to the handle display now:
+  - turns on the new "Problem" sensor (its `faults` attribute names them),
+  - shows "Oven fault: …" in red in the card,
+  - sends "The oven reports a fault. …" to every phone, once per fault.
+- New: during sous vide, the card warns when the oven cannot wet the wet
+  bulb. Then the sous vide temperature may be wrong.
+- New: the "Firmware" sensor shows the oven's firmware version.
+
 ## 0.17.3
 
 - During a descale, the card shows about how many minutes are left, for

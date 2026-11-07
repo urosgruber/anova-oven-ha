@@ -129,7 +129,29 @@ def message(hass, a):
         return title, "The cook stopped."
     if kind == "oven_lost":
         return title, "The oven went offline during a cook. It may still run."
+    if kind == "oven_fault":
+        names = ", ".join(FAULTS.get(f, f) for f in a.get("faults") or []) or "unknown part"
+        return title, (f"The oven reports a fault. {names[0].upper()}{names[1:]}. "
+                       "Stop the oven and check it. Do not leave it on alone.")
     return None
+
+
+# The server's fault names (see protocol::faults), as the phone shows them.
+FAULTS = {
+    "triacs_failed": "heating element switch (triac) failed",
+    "top_element_failed": "top heating element failed",
+    "bottom_element_failed": "bottom heating element failed",
+    "rear_element_failed": "rear heating element failed",
+    "fan_failed": "fan failed",
+    "boiler_failed": "steam boiler failed",
+    "boiler_overheated": "steam boiler overheated",
+    "evaporator_failed": "evaporator failed",
+    "evaporator_overheated": "evaporator overheated",
+    "top_overheated": "top of the oven overheated",
+    "bottom_overheated": "bottom of the oven overheated",
+    "lamp_failed": "lamp failed",
+    "display_link_failed": "handle display lost contact",
+}
 
 
 # Events that make no notification. Every event type the server announces
@@ -156,7 +178,9 @@ def handle(hass, msg):
         return []
     title, body = text
     sent = []
-    for service in targets(hass, attributes.get("started_by")):
+    # A fault concerns everyone in the home, not only the cook's owner.
+    owner = None if attributes.get("event_type") == "oven_fault" else attributes.get("started_by")
+    for service in targets(hass, owner):
         reply = hass.call({
             "type": "call_service", "domain": "notify", "service": service,
             "service_data": {"title": title, "message": body, "data": {"group": "anova-oven"}},

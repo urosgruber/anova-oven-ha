@@ -56,6 +56,11 @@ pub struct Snapshot {
     /// `water_empty` was announced in this stage. Set by [`Self::carry`], so
     /// a tank flag that flaps does not announce it again and again.
     pub tank_warned: bool,
+    /// The faults the oven reports now (see `protocol::faults`).
+    pub faults: Vec<String>,
+    /// The faults already announced. Set by [`Self::carry`]: kept until the
+    /// oven is idle with no fault, so a flag that flaps announces once.
+    pub faults_warned: Vec<String>,
 }
 
 /// The running stage ends by itself: its timer or probe target, or a timer
@@ -114,6 +119,8 @@ impl Snapshot {
             has_end: has_end(status, stage),
             reached: false,
             tank_warned: false,
+            faults: status.map(|s| s.faults.clone()).unwrap_or_default(),
+            faults_warned: Vec::new(),
             stages,
         }
     }
@@ -123,6 +130,20 @@ impl Snapshot {
         let same = self.same_stage(prev);
         self.reached = self.near_target() || (same && prev.reached);
         self.tank_warned = same && (prev.tank_warned || prev.dry_tank());
+        self.faults_warned = if !self.cooking && self.faults.is_empty() {
+            Vec::new()
+        } else {
+            let mut w = prev.faults_warned.clone();
+            w.extend(prev.faults.iter().filter(|f| !w.contains(f)).cloned());
+            w
+        };
+    }
+
+    /// A fault that has not been announced yet.
+    fn new_fault(&self, prev: &Snapshot) -> bool {
+        self.faults
+            .iter()
+            .any(|f| !prev.faults.contains(f) && !self.faults_warned.contains(f))
     }
 
     /// The tank is empty during a stage that needs water.
@@ -174,6 +195,7 @@ impl Snapshot {
             "target_c": self.target_c,
             "wet": self.wet,
             "unit": self.unit,
+            "faults": self.faults,
         })
     }
 }
@@ -189,6 +211,7 @@ pub enum Milestone {
     OvenLost,
     TempReached,
     WaterEmpty,
+    Fault,
 }
 
 impl Milestone {
@@ -203,6 +226,7 @@ impl Milestone {
             Milestone::OvenLost => "oven_lost",
             Milestone::TempReached => "temp_reached",
             Milestone::WaterEmpty => "water_empty",
+            Milestone::Fault => "oven_fault",
         }
     }
 
@@ -213,7 +237,7 @@ impl Milestone {
 }
 
 /// Every `event_type` the event entity announces.
-pub const EVENT_TYPES: [&str; 10] = [
+pub const EVENT_TYPES: [&str; 11] = [
     "cook_started",
     "preheat_done",
     "stage_started",
@@ -224,6 +248,7 @@ pub const EVENT_TYPES: [&str; 10] = [
     "oven_lost",
     "temp_reached",
     "water_empty",
+    "oven_fault",
 ];
 
 /// The milestones between two snapshots.
@@ -287,6 +312,10 @@ pub fn milestones(prev: &Snapshot, next: &Snapshot) -> Vec<Milestone> {
     // `cook_started`, so the processor knows who started the cook first.
     if next.dry_tank() && !next.tank_warned && !(next.same_stage(prev) && prev.dry_tank()) {
         out.push(Milestone::WaterEmpty);
+    }
+    // A part failed or overheated, in a cook or not. Once per fault.
+    if next.new_fault(prev) {
+        out.push(Milestone::Fault);
     }
     out
 }
@@ -521,6 +550,33 @@ mod tests {
         .unwrap();
         s.active_stage_index = Some(0);
         s
+    }
+
+    #[test]
+    fn a_fault_is_announced_once() {
+        let mut prev = cooking(1);
+        prev.carry(&cooking(1));
+        let mut next = Snapshot { faults: vec!["triacs_failed".into()], ..cooking(1) };
+        next.carry(&prev);
+        assert_eq!(milestones(&prev, &next), [Milestone::Fault]);
+        // The flag flaps: off, then on again. No second message.
+        let mut off = cooking(1);
+        off.carry(&next);
+        assert!(milestones(&next, &off).is_empty());
+        let mut again = Snapshot { faults: vec!["triacs_failed".into()], ..cooking(1) };
+        again.carry(&off);
+        assert!(milestones(&off, &again).is_empty());
+        // A second fault is new.
+        let mut more = Snapshot { faults: vec!["triacs_failed".into(), "fan_failed".into()], ..cooking(1) };
+        more.carry(&again);
+        assert_eq!(milestones(&again, &more), [Milestone::Fault]);
+        // Idle with no fault forgets them; the next one is announced again.
+        let idle = Snapshot { connected: true, ..Snapshot::default() };
+        let mut clear = idle.clone();
+        clear.carry(&more);
+        let mut back = Snapshot { faults: vec!["triacs_failed".into()], ..idle };
+        back.carry(&clear);
+        assert_eq!(milestones(&clear, &back), [Milestone::Fault]);
     }
 
     #[test]

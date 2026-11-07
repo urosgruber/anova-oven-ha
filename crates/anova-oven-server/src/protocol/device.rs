@@ -57,6 +57,36 @@ mod tests {
         }
     }
 
+    /// A real frame from a descale (firmware 2.1.16, 2026-11-07).
+    const DESCALE: &str = include_str!("../../testdata/device-state-descale.json");
+
+    #[test]
+    fn a_descale_frame_parses_as_descaling_with_no_faults() {
+        let status = crate::protocol::to_oven_status(&parse_state(DESCALE));
+        assert!(status.is_descaling() && !status.is_cooking());
+        assert!(status.faults.is_empty());
+        assert!(!status.wet_bulb_dose_failed);
+        assert_eq!(status.firmware_version.as_deref(), Some("2.1.16"));
+    }
+
+    #[test]
+    fn fault_flags_become_fault_names() {
+        let mut v: serde_json::Value = serde_json::from_str(DESCALE).unwrap();
+        let d = &mut v["data"];
+        d["systemInfo"]["triacsFailed"] = true.into();
+        d["nodes"]["heatingElements"]["rear"]["failed"] = true.into();
+        d["nodes"]["steamGenerators"]["boiler"]["overheated"] = true.into();
+        d["nodes"]["temperatureBulbs"]["dryTop"]["overheated"] = true.into();
+        d["nodes"]["temperatureBulbs"]["wet"]["doseFailed"] = true.into();
+        d["nodes"]["userInterfaceCircuit"]["communicationFailed"] = true.into();
+        let status = crate::protocol::to_oven_status(&parse_state(&v.to_string()));
+        assert_eq!(
+            status.faults,
+            ["triacs_failed", "rear_element_failed", "boiler_overheated", "top_overheated", "display_link_failed"]
+        );
+        assert!(status.wet_bulb_dose_failed);
+    }
+
     #[test]
     fn cooking_state_parses_cook_block() {
         let state = parse_state(COOKING);

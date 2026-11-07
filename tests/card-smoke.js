@@ -66,6 +66,10 @@ check("descale is not a cook", !html().includes("steps running") && !html().incl
 check("descale disables Start", /id="start"[^>]*disabled/.test(html()));
 const sent = h.calls.length; c._start();
 check("Start during a descale sends nothing", h.calls.length === sent);
+h = hass({ "binary_sensor.problem": "on" });
+h.states[`binary_sensor.${P}_problem`].attributes = { faults: ["triacs_failed", "fan_failed"] };
+c.hass = h;
+check("a fault shows in red in the header", html().includes("Oven fault: element switch failed (+1)") && html().includes("secondary warn"));
 h = hass({ "binary_sensor.connected": "off" }); c.hass = h;
 check("offline renders", html().includes("Offline"));
 // A saved 0.7 setup migrates into one step.
