@@ -381,7 +381,7 @@ async fn handle_message(
                 pending_user_action = state.cook.as_ref().map(|c| c.stage_transition_pending_user_action),
                 "[device] state"
             );
-            log_unknown_mode(&status.mode, text);
+            log_raw_state(&status.mode, text);
             let cook = protocol::to_oven_cook(&state);
             if let Some(session) = current.as_mut() {
                 let stages = cook.as_ref().map_or(&[][..], |c| c.stages.as_slice());
@@ -628,16 +628,16 @@ async fn handshake(
 #[cfg(test)]
 mod tests;
 
-/// How often [`log_unknown_mode`] writes the raw frame.
+/// How often [`log_raw_state`] writes the raw frame.
 const RAW_LOG_EVERY: Duration = Duration::from_secs(60);
 
-/// Logs the whole raw frame, at most once a minute, while the oven is in a
-/// mode the server does not model (for example `descale`). The parsed state
-/// drops every field it does not know, such as the descale countdown that
-/// the oven shows on its display, so this is the only way to find them.
-fn log_unknown_mode(mode: &str, raw: &str) {
+/// At debug level, logs the whole raw frame at most once a minute, in any
+/// mode. The parsed state drops every field it does not know (fault flags,
+/// the wet bulb's dose state, and so on), so this is the way to find them.
+/// The App turns debug on with its `log_level` option.
+fn log_raw_state(mode: &str, raw: &str) {
     static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
-    if matches!(mode, "idle" | "cook") {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
         return;
     }
     let Ok(mut last) = LAST.lock() else { return };
@@ -645,5 +645,5 @@ fn log_unknown_mode(mode: &str, raw: &str) {
         return;
     }
     *last = Some(Instant::now());
-    info!(mode = %mode, raw = %raw, "[device] raw state in an unknown mode");
+    debug!(mode = %mode, raw = %raw, "[device] raw state");
 }
