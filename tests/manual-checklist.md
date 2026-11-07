@@ -38,5 +38,4 @@ Do these tests when the case happens in normal use.
 
 ## Backlog (not built yet)
 
-- Emergency stop through the Shelly plug.
-- Emergency stop: the plan is ready; it waits for your decisions.
+- Emergency stop through the Shelly plug. The plan is ready; it waits for your decisions.
