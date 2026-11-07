@@ -75,11 +75,19 @@ Companion app:
 | The safety limit stops the cook | "Safety stop: the oven ran 4 h with no timer, so the App stopped it." |
 | Auto stop or the safety limit cannot stop the oven | "The App could not stop the oven. Stop it on the oven." |
 | The oven goes offline during a cook | "The oven went offline during a cook. It may still run." |
+| A part of the oven fails or overheats | "The oven reports a fault. Fan failed. Stop the oven and check it." |
 
 "Reached its temperature" means within 2 °C of the target (0.5 °C in sous
 vide). It comes once per step. When the door opens and the temperature
 falls, it does not come again. "The water tank is empty" also comes once
 per step.
+
+A fault comes once per fault and goes to everyone. The oven reports
+these faults: a failed heating element, triac (the switch for the
+heating elements), fan, steam boiler, evaporator or lamp; an overheated
+boiler, evaporator, oven top or oven bottom; and a lost link to the
+handle display. The "Problem" sensor of the Anova Oven device is on
+while a fault lasts. Its `faults` attribute names them.
 
 A cook started from the dashboard card notifies the person who started
 it. A cook started on the oven notifies everyone. A person's phones are

@@ -128,10 +128,20 @@ class NotifyMessages(unittest.TestCase):
              "Safety stop: the oven ran 4 h with no timer, so the App stopped it."),
             ({"event_type": "stage_started", "stage_index": 1, "stage_count": 3, "current_stage": "Cook"},
              "Step 2 of 3 started: Cook"),
+            ({"event_type": "oven_fault", "faults": ["triacs_failed", "fan_failed"]},
+             "The oven reports a fault. Heating element switch (triac) failed, fan failed. "
+             "Stop the oven and check it. Do not leave it on alone."),
         ]
         for attributes, text in cases:
             with self.subTest(text=text):
                 self.assertEqual(notify.message(hass, attributes)[1], text)
+
+    def test_every_server_fault_has_a_text(self):
+        source = read("crates/anova-oven-server/src/protocol/mod.rs")
+        body = source.split("pub fn faults(", 1)[1].split("\n}\n", 1)[0]
+        names = re.findall(r'"(\w+)"\)', body)
+        self.assertGreater(len(names), 10)
+        self.assertEqual(sorted(names), sorted(notify.FAULTS))
 
     def test_other_failed_commands_stay_quiet(self):
         self.assertIsNone(notify.message(FakeHass(), {"event_type": "command_failed", "command": "lamp"}))
@@ -152,6 +162,12 @@ class NotifyHandle(unittest.TestCase):
                                             "started_by": "user-mom"}))
         self.assertEqual(sent, ["mobile_app_moms_phone"])
         self.assertEqual(hass.sent, [("mobile_app_moms_phone", "The oven is at 200 °C.")])
+
+    def test_a_fault_goes_to_everyone(self):
+        hass = FakeHass(**FAMILY)
+        sent = notify.handle(hass, trigger({"event_type": "oven_fault", "faults": ["fan_failed"],
+                                            "started_by": "user-mom"}))
+        self.assertEqual(sent, ["mobile_app_moms_phone", "mobile_app_my_phone"])
 
     def test_the_entity_coming_back_is_not_an_event(self):
         hass = FakeHass(**FAMILY)

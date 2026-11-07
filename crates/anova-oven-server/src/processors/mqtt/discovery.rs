@@ -160,7 +160,8 @@ fn config(topics: &Topics, e: &Entity) -> Value {
 const LAST_SEEN: &str = "{{ {'mode': value_json.get('mode'), 'temperature_c': value_json.get('temperature_c'), \
 'target_temperature_c': value_json.get('target_temperature_c'), 'recipe_title': value_json.get('recipe_title'), \
 'stage_started_at': value_json.get('stage_started_at'), 'timer_total_secs': value_json.get('timer_total_secs'), \
-'cook_done': value_json.get('cook_done', false)} | tojson }}";
+'cook_done': value_json.get('cook_done', false), \
+'wet_bulb_dose_failed': value_json.get('wet_bulb_dose_failed', false)} | tojson }}";
 
 fn reading(topics: &Topics, field: &str, extra: Value) -> Value {
     let mut v = json!({
@@ -387,6 +388,32 @@ fn entities(topics: &Topics, options: &[String]) -> Vec<Entity> {
                 &format!("{progress} and {progress}.next_stage_ready"),
                 None,
             ),
+        ),
+        // A part failed or overheated; the attribute names which ones.
+        entity(
+            "binary_sensor",
+            "problem",
+            "Problem",
+            Needs::Oven,
+            {
+                let mut v = on_off(topics, "value_json.get('faults')", Some("problem"));
+                v["json_attributes_topic"] = topics.state().into();
+                v["json_attributes_template"] =
+                    "{{ {'faults': value_json.get('faults', [])} | tojson }}".into();
+                v
+            },
+        ),
+        entity(
+            "sensor",
+            "firmware",
+            "Firmware",
+            Needs::Oven,
+            json!({
+                "state_topic": topics.state(),
+                "value_template": "{{ value_json.get('firmware_version') }}",
+                "entity_category": "diagnostic",
+                "icon": "mdi:chip",
+            }),
         ),
         entity(
             "binary_sensor",
