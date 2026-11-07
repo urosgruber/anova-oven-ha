@@ -164,9 +164,14 @@ The cog opens the maintenance panel in the same space:
 - Heating element prep (from the oven's manual), fully automatic: rear
   176 °C for 15 min, a 15-minute cool-down (fan only, vent open), top and
   bottom 176 °C for 15 min, then a cool-down until you tap Stop.
-- Descale: shows if a descale is needed. Start it on the oven: fill the
-  tank with descaler and water, press the descale symbol, then Start. The
-  card cannot start a descale yet; the command is untested. During a
+- Descale: shows if a descale is needed. Fill the tank with descaler
+  and water first. Then start the descale on the oven (press the descale
+  symbol, then Start), or tap Start in the Descale item. The item shows
+  only when the oven asks for a descale or runs one. Start and Abort need
+  a second tap. The App starts a descale only when the oven is idle and
+  the tank has water. Starting and aborting from the card is
+  experimental: the oven commands are not tested yet. You must still be
+  at the oven for the clear water and the drip tray. During a
   descale, the card shows "Descaling" with about how many minutes are
   left, and Bake is off. A descale takes about 48 minutes: the descale
   (about 38 minutes), then "add clean water", a 9-minute rinse, and

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.20.0
+
+- Card: start or abort a descale from the maintenance panel (cog). The
+  Descale item shows only when the oven asks for a descale or runs one.
+  Start and Abort need a second tap. Experimental: the oven commands
+  are not tested on a real oven yet.
+- The App starts a descale only when the oven is idle and the water
+  tank is not empty.
+
 ## 0.19.2
 
 - Fix: the "Visit" link on the device page did not open. It now opens
