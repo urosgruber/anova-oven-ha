@@ -9,6 +9,10 @@ export ANOVA_DEVICE_BIND=0.0.0.0:4443
 export ANOVA_BIND=0.0.0.0:8080
 # Stop a dry cook that nothing ends after this many hours; 0 is off.
 export ANOVA_SAFETY_LIMIT_HOURS="$(bashio::config 'safety_limit_hours' '4')"
+# debug: more detail in the log, with the oven's raw message once a minute.
+if [ "$(bashio::config 'log_level' 'info')" = "debug" ]; then
+  export RUST_LOG="anova_oven_server=debug"
+fi
 if [ -n "${TZ:-}" ]; then
   export ANOVA_TIMEZONE="${TZ}"
 fi
