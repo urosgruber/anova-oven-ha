@@ -1058,6 +1058,11 @@ fn control_request(name: &str, payload: &str) -> Result<ControlRequest, String> 
             }
             _ => Err(format!("temperature wants 25–250 °C, not `{payload}`")),
         },
+        "descale" => match payload.trim().to_ascii_uppercase().as_str() {
+            "START" => Ok(ControlRequest::Descale { start: true }),
+            "ABORT" => Ok(ControlRequest::Descale { start: false }),
+            _ => Err(format!("descale wants START or ABORT, not `{payload}`")),
+        },
         other => Err(format!("unknown command `{other}`")),
     }
 }
@@ -1168,6 +1173,15 @@ mod tests {
         assert!(control_request("lamp", "dim").is_err());
         assert!(control_request("timer", "0").is_err());
         assert!(control_request("bogus", "").is_err());
+        assert_eq!(
+            control_request("descale", "start"),
+            Ok(ControlRequest::Descale { start: true })
+        );
+        assert_eq!(
+            control_request("descale", "ABORT"),
+            Ok(ControlRequest::Descale { start: false })
+        );
+        assert!(control_request("descale", "").is_err());
     }
 
     #[test]

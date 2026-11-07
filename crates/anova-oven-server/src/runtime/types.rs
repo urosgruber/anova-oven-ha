@@ -98,8 +98,8 @@ pub enum StateMachineCommand {
 /// with no oven connected. Published to Home Assistant as `command_failed`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandFailure {
-    /// `start`, `stop`, `next_stage`, `timer`, `temperature`, `lamp` or
-    /// `temperature_unit`.
+    /// `start`, `stop`, `next_stage`, `timer`, `temperature`, `lamp`,
+    /// `temperature_unit` or `descale`.
     pub command: String,
     pub reason: String,
 }
@@ -113,6 +113,7 @@ impl ControlRequest {
             ControlRequest::Temperature { .. } => "temperature",
             ControlRequest::Lamp { .. } => "lamp",
             ControlRequest::TemperatureUnit { .. } => "temperature_unit",
+            ControlRequest::Descale { .. } => "descale",
         }
     }
 }
@@ -137,6 +138,10 @@ pub enum ControlRequest {
     /// The oven's display unit: `"C"` or `"F"`.
     TemperatureUnit {
         unit: String,
+    },
+    /// Start the oven's own descale program (`start: true`) or abort it.
+    Descale {
+        start: bool,
     },
 }
 
@@ -163,6 +168,10 @@ pub enum OvenControl {
     UpdateCookStages {
         stages: Vec<serde_json::Value>,
     },
+    /// `CMD_APO_START_DESCALE`, sent with no payload.
+    StartDescale,
+    /// `CMD_APO_ABORT_DESCALE`, sent with no payload.
+    AbortDescale,
 }
 
 #[derive(Debug)]

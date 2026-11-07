@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.19.2";
+const CARD_VERSION = "0.20.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -693,7 +693,7 @@ class AnovaOvenCard extends HTMLElement {
       <div class="panel">
         <div class="panel-head">
           <span>Maintenance</span>
-          <span class="head-tags" ${m.descale ? `title="Fill the tank with descaler and water, press the descale symbol on the oven, then Start on the handle."` : ""}>
+          <span class="head-tags" ${m.descale ? `title="Fill the tank with descaler and water. Tap Start below, or press the descale symbol on the oven and then Start on the handle."` : ""}>
             Descale <span class="tag ${m.descale ? "warn" : m.descale === null ? "unknown" : ""}">${m.descale ? "needed" : m.descale === null ? "unknown" : "not needed"}</span>
             ${m.waterEmpty ? `Water <span class="tag warn">empty</span>` : ""}
           </span>
@@ -706,6 +706,7 @@ class AnovaOvenCard extends HTMLElement {
           </div>
           <button class="feature action start item-btn" id="prep" ${busy ? "disabled" : ""}><ha-icon icon="mdi:play"></ha-icon>Start</button>
         </div>
+        ${m.descale || m.descaling ? this._descaleItem(m) : ""}
         ${m.hasPlug ? this._powerItem(m) : ""}
         ${m.autoStop === null ? "" : `
         <div class="item">
@@ -717,6 +718,33 @@ class AnovaOvenCard extends HTMLElement {
             <ha-icon icon="${m.autoStop ? "mdi:checkbox-marked-circle-outline" : "mdi:checkbox-blank-circle-outline"}"></ha-icon><span>${m.autoStop ? "On" : "Off"}</span></button>
         </div>`}
       </div>`;
+  }
+
+  // The oven's own descale program. Shown only when the oven asks for a
+  // descale or runs one. Start and Abort need a second tap. The server
+  // refuses a start unless the oven is idle with water in the tank.
+  _descaleItem(m) {
+    const action = m.descaling ? "abort" : "start";
+    const armed = this._armed && this._armed.key === `descale:${action}` && Date.now() < this._armed.until;
+    const blocked = !m.descaling && (!m.connected || m.cooking || m.waterEmpty);
+    const why = m.descaling
+      ? "Follow the oven display: add clear water, then empty the drip tray"
+      : "Fill the tank with descaler and water first";
+    return `
+        <div class="item">
+          <div class="item-text">
+            <b>${m.descaling ? `Descaling${esc(descaleLeft(m))}` : "Descale"}</b>
+            <span>${why}</span>
+          </div>
+          <button class="feature action ${m.descaling ? "stop" : "start"} item-btn ${armed ? "armed" : ""}" id="descale-${action}"
+            ${blocked ? "disabled" : ""}>
+            <ha-icon icon="mdi:${m.descaling ? "stop" : "play"}"></ha-icon>${armed ? "Tap again" : m.descaling ? "Abort" : "Start"}</button>
+        </div>`;
+  }
+
+  _descale(action) {
+    this._confirm(`descale:${action}`, () => this._call("mqtt", "publish", {
+      topic: `${this._config.mqtt_prefix}/cmd/descale`, payload: action.toUpperCase() }));
   }
 
   _powerItem(m) {
@@ -820,6 +848,9 @@ class AnovaOvenCard extends HTMLElement {
     if ($("prep")) $("prep").onclick = () => this._startPrep();
     if ($("auto-stop")) $("auto-stop").onclick = () => this._call("switch", m.autoStop ? "turn_off" : "turn_on",
       { entity_id: this._id("switch", "auto_stop") });
+    for (const action of ["start", "abort"]) {
+      if ($(`descale-${action}`)) $(`descale-${action}`).onclick = () => this._descale(action);
+    }
     for (const action of ["on", "off", "restart"]) {
       if ($(`power-${action}`)) $(`power-${action}`).onclick = () => this._power(action);
     }

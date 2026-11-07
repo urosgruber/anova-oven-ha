@@ -489,3 +489,24 @@ function programFromStagesForTest(card) {
   check("- from 12m30s goes to 12 min", c._view().timer === 12);
   delete global.document;
 }
+
+// --- 0.20.0: descale from the card ---
+{
+  const tools = (c) => { c._panel = "maintenance"; c._render(); return c.shadowRoot.innerHTML; };
+  let c = new Card(); c.setConfig({}); let h = hass({ "binary_sensor.descale_required": "off" }); c.hass = h;
+  check("descale not needed: no descale item", !tools(c).includes('id="descale-'));
+  c = new Card(); c.setConfig({}); h = hass({ "binary_sensor.descale_required": "on" }); c.hass = h;
+  let o = tools(c);
+  check("descale needed: Start descale item", o.includes('id="descale-start"') && !/id="descale-start"[^>]*disabled/.test(o));
+  c._descale("start");
+  check("first tap on Start descale sends nothing", h.calls.length === 0 && tools(c).includes("Tap again"));
+  c._descale("start");
+  check("second tap sends cmd/descale START", h.calls.at(-1).data.topic === "anova/oven/cmd/descale" && h.calls.at(-1).data.payload === "START");
+  c = new Card(); c.setConfig({}); c.hass = hass({ "binary_sensor.descale_required": "on", "binary_sensor.water_tank_empty": "on" });
+  check("empty tank disables Start descale", /id="descale-start"[^>]*disabled/.test(tools(c)));
+  c = new Card(); c.setConfig({}); h = hass({ "sensor.mode": "Descaling", "binary_sensor.descale_required": "on" }); c.hass = h;
+  o = tools(c);
+  check("descaling: Abort item, no Start", o.includes('id="descale-abort"') && !o.includes('id="descale-start"'));
+  c._descale("abort"); c._descale("abort");
+  check("two taps on Abort send cmd/descale ABORT", h.calls.at(-1).data.payload === "ABORT");
+}

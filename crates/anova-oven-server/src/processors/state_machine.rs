@@ -406,6 +406,7 @@ fn control(state: &SmState, request: &ControlRequest) -> Result<OvenControl, SmE
         ControlRequest::TemperatureUnit { unit } => {
             return Ok(OvenControl::SetTemperatureUnit { unit: unit.clone() })
         }
+        ControlRequest::Descale { start } => return descale(state, *start),
         _ => {}
     }
 
@@ -453,10 +454,38 @@ fn control(state: &SmState, request: &ControlRequest) -> Result<OvenControl, SmE
             Ok(update_cook_stages(&stages))
         }
         ControlRequest::Timer { secs } => Ok(OvenControl::SetTimer { secs: *secs }),
-        ControlRequest::Lamp { .. } | ControlRequest::TemperatureUnit { .. } => {
+        ControlRequest::Lamp { .. }
+        | ControlRequest::TemperatureUnit { .. }
+        | ControlRequest::Descale { .. } => {
             unreachable!("handled above")
         }
     }
+}
+
+/// Start or abort the oven's descale program. A start needs an idle oven
+/// with water in the tank: the program cannot run over a cook, and the
+/// oven's own descale needs the tank. An abort needs a running descale.
+fn descale(state: &SmState, start: bool) -> Result<OvenControl, SmError> {
+    let status = state
+        .status
+        .as_ref()
+        .ok_or_else(|| SmError::Conflict("the oven hasn't reported its state yet".into()))?;
+    if !start {
+        if !status.is_descaling() {
+            return Err(SmError::Conflict("the oven is not descaling".into()));
+        }
+        return Ok(OvenControl::AbortDescale);
+    }
+    if status.mode != "idle" {
+        return Err(SmError::Conflict(format!(
+            "the oven must be idle to descale, not `{}`",
+            status.mode
+        )));
+    }
+    if status.water_tank_empty {
+        return Err(SmError::Conflict("the water tank is empty".into()));
+    }
+    Ok(OvenControl::StartDescale)
 }
 
 /// Send `control` to the oven, tracked under `name` until it's acked.
@@ -1582,6 +1611,37 @@ mod tests {
             control(&state, &ControlRequest::Lamp { on: true }),
             Err(SmError::Unsupported(_))
         ));
+    }
+
+    #[test]
+    fn descale_starts_only_on_an_idle_oven_with_water() {
+        let mut state = local_state();
+        let start = ControlRequest::Descale { start: true };
+        assert!(matches!(control(&state, &start), Err(SmError::Conflict(_))));
+
+        let _ = apply_apo_state(&mut state, oven_status("idle", 0));
+        assert!(matches!(control(&state, &start), Ok(OvenControl::StartDescale)));
+
+        let mut empty = oven_status("idle", 0);
+        empty.water_tank_empty = true;
+        let _ = apply_apo_state(&mut state, empty);
+        assert!(matches!(control(&state, &start), Err(SmError::Conflict(_))));
+
+        let _ = apply_apo_state(&mut state, oven_status("cook", 600));
+        assert!(matches!(control(&state, &start), Err(SmError::Conflict(_))));
+    }
+
+    #[test]
+    fn descale_aborts_only_a_running_descale() {
+        let mut state = local_state();
+        let abort = ControlRequest::Descale { start: false };
+        let _ = apply_apo_state(&mut state, oven_status("idle", 0));
+        assert!(matches!(control(&state, &abort), Err(SmError::Conflict(_))));
+
+        let _ = apply_apo_state(&mut state, oven_status("descale", 0));
+        assert!(matches!(control(&state, &abort), Ok(OvenControl::AbortDescale)));
+        let start = ControlRequest::Descale { start: true };
+        assert!(matches!(control(&state, &start), Err(SmError::Conflict(_))));
     }
 
     #[test]

@@ -519,6 +519,9 @@ fn control_command(control: OvenControl) -> (&'static str, Option<serde_json::Va
             "CMD_APO_UPDATE_COOK_STAGES",
             Some(serde_json::json!({ "stages": stages })),
         ),
+        // Untested on a real oven: the payload is unknown, so none is sent.
+        OvenControl::StartDescale => ("CMD_APO_START_DESCALE", None),
+        OvenControl::AbortDescale => ("CMD_APO_ABORT_DESCALE", None),
     }
 }
 
