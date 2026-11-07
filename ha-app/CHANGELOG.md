@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.17.3
+
+- During a descale, the card shows about how many minutes are left, for
+  example "Descaling · about 20 min left". The oven does not send its
+  countdown, so the card uses 48 minutes: the length of one measured
+  descale with fast water and tray changes.
+- Fix: after an App restart during a descale, the card showed a wrong
+  start time. Now it shows only "Descaling".
+
 ## 0.17.2
 
 - New option `log_level` (info or debug). With debug, the App log has
