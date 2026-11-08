@@ -110,7 +110,7 @@ class NotifyMessages(unittest.TestCase):
         hass = FakeHass()
         for kind in event_types():
             with self.subTest(kind=kind):
-                text = notify.message(hass, {"event_type": kind, "stage_index": 0, "stage_count": 2})
+                text = notify.message(hass, {"event_type": kind, "step_index": 0, "step_count": 2})
                 self.assertTrue(bool(text) != (kind in notify.QUIET),
                                 f"{kind}: has a text and is QUIET, or neither")
 
@@ -126,8 +126,13 @@ class NotifyMessages(unittest.TestCase):
             ({"event_type": "cook_stopped"}, "The cook stopped."),
             ({"event_type": "cook_stopped", "reason": {"kind": "safety_limit", "hours": 4.0}},
              "Safety stop: the oven ran 4 h with no timer, so the App stopped it."),
-            ({"event_type": "stage_started", "stage_index": 1, "stage_count": 3, "current_stage": "Cook"},
+            ({"event_type": "stage_started", "step_index": 1, "step_count": 3, "current_step": "Cook"},
              "Step 2 of 3 started: Cook"),
+            ({"event_type": "stage_waiting", "step_index": 0, "step_count": 2, "next_step": "Cook · 180 °C dry"},
+             "Step 2 waits for you. Tap Start step 2. Next: Cook · 180 °C dry"),
+            ({"event_type": "stage_waiting", "step_index": 0, "step_count": 2, "preheat": True,
+              "next_step_prompt": "Load the loaf"},
+             "Preheat done. Step 1 waits for you. Tap Start cooking. Note: Load the loaf"),
             ({"event_type": "oven_fault", "faults": ["triacs_failed", "fan_failed"]},
              "The oven reports a fault. Heating element switch (triac) failed, fan failed. "
              "Stop the oven and check it. Do not leave it on alone."),
@@ -139,7 +144,8 @@ class NotifyMessages(unittest.TestCase):
     def test_every_server_fault_has_a_text(self):
         source = read("crates/anova-oven-server/src/protocol/mod.rs")
         body = source.split("pub fn faults(", 1)[1].split("\n}\n", 1)[0]
-        names = re.findall(r'"(\w+)"\)', body)
+        # Each fault is `(condition, "name")`, on one line or (rustfmt) several.
+        names = re.findall(r'"(\w+)",?\s*\)', body)
         self.assertGreater(len(names), 10)
         self.assertEqual(sorted(names), sorted(notify.FAULTS))
 

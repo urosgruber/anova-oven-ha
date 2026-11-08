@@ -510,3 +510,28 @@ function programFromStagesForTest(card) {
   c._descale("abort"); c._descale("abort");
   check("two taps on Abort send cmd/descale ABORT", h.calls.at(-1).data.payload === "ABORT");
 }
+
+// --- 0.22.0: a preheat and its cook are one step, as the server counts ---
+{
+  const stages = [
+    { kind: "preheat", temperature_c: 220 },
+    { kind: "cook", temperature_c: 220, timer_added: true, duration_secs: 1200 },
+    { kind: "cook", temperature_c: 180, timer_added: true, duration_secs: 600 },
+  ];
+  const cook = (over) => {
+    const h = hass({ "binary_sensor.cooking": "on", "sensor.current_recipe": "Bread", ...over });
+    h.states[`sensor.${P}_current_recipe`].attributes = { stages };
+    const c = new Card(); store["anova-oven-card:setup"] = null; c.setConfig({}); c.hass = h;
+    return c;
+  };
+  const chips = (c) => (c.shadowRoot.innerHTML.match(/class="chip-step/g) || []).length;
+  let c = cook({ "sensor.mode": "Preheating", "sensor.stage": "1 of 2" });
+  check("3 stages with a preheat: 2 running chips, the first with the preheat mark", chips(c) === 2 && c.shadowRoot.innerHTML.includes("↑220°") && c.shadowRoot.innerHTML.includes("180°"));
+  check("in the preheat, Next says Skip preheat", c.shadowRoot.innerHTML.includes("Skip preheat"));
+  c = cook({ "sensor.mode": "Preheating", "sensor.stage": "1 of 2", "binary_sensor.next_stage_ready": "on" });
+  check("a preheat that waits: Start cooking", c.shadowRoot.innerHTML.includes("Start cooking") && c.shadowRoot.innerHTML.includes("Preheat done · waits for you"));
+  c = cook({ "sensor.mode": "Cooking", "sensor.stage": "1 of 2" });
+  check("after the preheat, Next says Skip to step 2", c.shadowRoot.innerHTML.includes("Skip to step 2"));
+  c = cook({ "sensor.mode": "Cooking", "sensor.stage": "2 of 2" });
+  check("on the last step, no Next button", !c.shadowRoot.innerHTML.includes('id="next"'));
+}

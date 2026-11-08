@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.21.0";
+const CARD_VERSION = "0.22.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -580,10 +580,10 @@ class AnovaOvenCard extends HTMLElement {
 
           <div class="pair go">
             ${live ? `
-              ${stagePos(m).cur < stagePos(m).total ? `
+              ${nextAction(m) ? `
                 <button class="feature action ${m.nextReady ? "start" : ""}" id="next"
-                  title="${m.nextReady ? "The next step waits for you" : "Skip the rest of this step"}">
-                  <ha-icon icon="${m.nextReady ? "mdi:play" : "mdi:skip-next"}"></ha-icon>${m.nextReady ? `Start step ${stagePos(m).cur + 1}` : `Skip to step ${stagePos(m).cur + 1}`}</button>` : ""}
+                  title="${nextAction(m).title}">
+                  <ha-icon icon="${m.nextReady ? "mdi:play" : "mdi:skip-next"}"></ha-icon>${nextAction(m).label}</button>` : ""}
               <button class="feature action stop ${armed ? "armed" : ""}" id="stop">
                 <ha-icon icon="mdi:stop"></ha-icon>${armed ? "Tap again to stop" : "Stop"}</button>` : `
               ${s.sel === 0 ? `
@@ -1003,10 +1003,56 @@ function markLeft(f) {
   return `calc(6px + (100% - 12px) * ${clamp(f, 0, 1)})`;
 }
 
-// The running step, from the server's stages; null when unknown.
+// The oven's stages as steps, the way the server counts them (App 0.22.0+,
+// anova_oven_api::steps): a preheat and the cook stage after it are one
+// step. The Stage sensor ("2 of 3") counts these steps.
+function toSteps(stages) {
+  const out = [];
+  for (let i = 0; i < stages.length; i++) {
+    const next = stages[i + 1];
+    if (stages[i].kind === "preheat" && next && next.kind !== "preheat") {
+      out.push({ preheat: stages[i], cook: next });
+      i++;
+    } else if (stages[i].kind === "preheat") out.push({ preheat: stages[i], cook: null });
+    else out.push({ preheat: null, cook: stages[i] });
+  }
+  return out;
+}
+
+// The running cook's steps, or null when they do not match the Stage sensor.
+function runningSteps(m) {
+  if (!Array.isArray(m.stages)) return null;
+  const steps = toSteps(m.stages);
+  return steps.length === stagePos(m).total ? steps : null;
+}
+
+// Whether the running step is in its preheat.
+function inPreheat(m) {
+  return m.phase === "Preheating";
+}
+
+// The running oven stage, from the server's stages; null when unknown.
 function runningStage(m) {
+  const steps = runningSteps(m);
+  const step = steps && steps[stagePos(m).cur - 1];
+  if (!step) return null;
+  return inPreheat(m) ? step.preheat || step.cook : step.cook || step.preheat;
+}
+
+// The Next button during a cook: its label and its hint, or null when
+// there is no stage after this one. In a preheat, the next oven stage is
+// the cook of the same step.
+function nextAction(m) {
   const { cur, total } = stagePos(m);
-  return Array.isArray(m.stages) && m.stages.length === total ? m.stages[cur - 1] || null : null;
+  const steps = runningSteps(m);
+  const step = steps && steps[cur - 1];
+  if (inPreheat(m) && (!step || step.cook)) {
+    return m.nextReady ? { label: "Start cooking", title: "The preheat is done. The oven waits for you" }
+      : { label: "Skip preheat", title: "Skip the rest of the preheat" };
+  }
+  if (cur >= total) return null;
+  return m.nextReady ? { label: `Start step ${cur + 1}`, title: "The next step waits for you" }
+    : { label: `Skip to step ${cur + 1}`, title: "Skip the rest of this step" };
 }
 
 // How the running step ends. A finished timer stays "timer".
@@ -1228,15 +1274,16 @@ function stepChips(s, off) {
 // While cooking: the running cook's stages, done ones ticked.
 function runningChips(m) {
   const { cur, total } = stagePos(m);
-  const known = Array.isArray(m.stages) && m.stages.length === total ? m.stages : null;
+  const known = runningSteps(m);
   const chips = Array.from({ length: total }, (_, i) => {
     const n = i + 1;
     const state = n < cur || (m.done && n === cur) ? "done" : n === cur ? "on" : "";
-    const sg = known && known[i];
+    const step = known && known[i];
+    const sg = step && (step.cook || step.preheat);
     const cool = sg && sg.temperature_c <= COOL_C && sg.vent_open;
     const label = !sg ? "" : cool ? `<ha-icon icon="mdi:snowflake"></ha-icon>`
-      : `<span>${sg.kind === "preheat" ? "↑" : ""}${Math.round(sg.temperature_c)}°</span>`;
-    return `<span class="chip-step ${state}" title="${sg ? esc(sg.title || (sg.kind === "preheat" ? "Preheat" : `${Math.round(sg.temperature_c)} °C`)) : `Stage ${n}`}">
+      : `<span>${step.preheat ? "↑" : ""}${Math.round(sg.temperature_c)}°</span>`;
+    return `<span class="chip-step ${state}" title="${sg ? esc(sg.title || `${step.preheat ? "Preheat, then " : ""}${Math.round(sg.temperature_c)} °C`) : `Step ${n}`}">
       <span class="n">${state === "done" ? "✓" : n}</span>${label}</span>`;
   }).join("");
   return `<div class="feature steps running" aria-label="Stages">${chips}</div>`;
@@ -1367,7 +1414,7 @@ function barLabel(m) {
   const desc = /cool/i.test(m.stageDescription || "") ? "Cooling down" : m.phase === "Preheating" ? "Preheating" : "";
   let left;
   if (m.done) left = `Done · holding ${m.target !== null ? `${Math.round(m.target)} °C` : "the temperature"}`;
-  else if (m.nextReady) left = `Step ${cur + 1} waits for you`;
+  else if (m.nextReady) left = inPreheat(m) ? "Preheat done · waits for you" : `Step ${cur + 1} waits for you`;
   else left = [step, desc].filter(Boolean).join(" · ") || m.phase;
   const rem = remaining(m);
   const end = m.autoStop && stagePos(m).cur === stagePos(m).total ? "Stops" : "Ends";

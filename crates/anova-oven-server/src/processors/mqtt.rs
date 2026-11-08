@@ -3,7 +3,9 @@
 //! Off unless `ANOVA_MQTT_URL` is set. It reads what the HTTP API serves
 //! (the read model, cook progress and the oven's connection) and sends
 //! commands through the same state-machine paths, so the two can't drift
-//! apart. See "Home Assistant over MQTT" in `docs/oven-offline-plan.md`.
+//! apart. See "Home Assistant over MQTT" in `docs/oven-offline-plan.md`,
+//! and `docs/mqtt-ha-split.md` for which topics are generic and which are
+//! Home Assistant's, before adding one.
 //!
 //! Not critical: a broker outage must not take the server down. The client
 //! reconnects with backoff, and every connect republishes discovery and the
@@ -48,7 +50,8 @@ pub struct MqttConfig {
     /// Local mode: announce the controls only it can drive.
     pub local: bool,
     /// The broker drops one of two clients with the same ID, so a second
-    /// server (a test run on a Mac) needs its own.
+    /// server on the same broker (a test run beside the real one) needs
+    /// its own.
     pub client_id: String,
     /// Stop a dry cook that nothing ends after this long; `None` is off.
     pub safety_limit: Option<Duration>,
@@ -72,6 +75,15 @@ fn safety_limit(value: Option<&str>) -> Option<Duration> {
     (hours > 0.0).then(|| Duration::try_from_secs_f64(hours * 3600.0).unwrap_or(default))
 }
 
+/// `ANOVA_MQTT_CLIENT_ID`, or `anova-oven-server` when it's unset or blank.
+fn client_id(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .unwrap_or("anova-oven-server")
+        .to_string()
+}
+
 impl MqttConfig {
     /// From `ANOVA_MQTT_*`; `None` when `ANOVA_MQTT_URL` isn't set.
     pub fn from_env(local: bool) -> Option<Self> {
@@ -87,10 +99,7 @@ impl MqttConfig {
                     .unwrap_or_else(|_| "homeassistant".into()),
             },
             local,
-            client_id: std::env::var("ANOVA_MQTT_CLIENT_ID")
-                .ok()
-                .filter(|id| !id.trim().is_empty())
-                .unwrap_or_else(|| "anova-oven-server".into()),
+            client_id: client_id(std::env::var("ANOVA_MQTT_CLIENT_ID").ok().as_deref()),
             safety_limit: safety_limit(std::env::var("ANOVA_SAFETY_LIMIT_HOURS").ok().as_deref()),
         })
     }
@@ -102,7 +111,7 @@ impl MqttConfig {
             options.set_credentials(user, pass);
         }
         options.set_keep_alive(Duration::from_secs(30));
-        // Discovery for the recipe select and the selected recipe's stages
+        // Discovery for the recipe select and the selected recipe's steps
         // can outgrow rumqttc's 10 KiB default.
         options.set_max_packet_size(256 * 1024, 256 * 1024);
         options.set_last_will(LastWill::new(
@@ -1418,5 +1427,12 @@ mod tests {
         // No timer: no end, and the anchor goes.
         assert_eq!(EndAnchor::update(&mut anchor, None, 0, 1013), None);
         assert_eq!(anchor, None);
+    }
+
+    #[test]
+    fn client_id_defaults_when_unset_or_blank() {
+        assert_eq!(client_id(None), "anova-oven-server");
+        assert_eq!(client_id(Some("  ")), "anova-oven-server");
+        assert_eq!(client_id(Some(" oven-test ")), "oven-test");
     }
 }

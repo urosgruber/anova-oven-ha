@@ -31,8 +31,11 @@ pub fn options(recipes: &[Recipe]) -> Vec<(String, String)> {
     out
 }
 
-/// The selected recipe sensor's attributes.
+/// The selected recipe sensor's attributes. Its steps are the user's (see
+/// [`anova_oven_api::steps`]), not the oven's stages: a preheat and its cook
+/// are one.
 pub fn attributes(recipe: &Recipe, unit: &str) -> serde_json::Value {
+    let steps = anova_oven_api::steps(&recipe.stages);
     let total_timed_secs: u64 = recipe.stages.iter().filter_map(|s| s.duration_secs).sum();
     serde_json::json!({
         "title": recipe.title,
@@ -40,13 +43,19 @@ pub fn attributes(recipe: &Recipe, unit: &str) -> serde_json::Value {
             RecipeSource::Own => "own",
             RecipeSource::Bookmarked => "bookmarked",
         },
-        "stage_count": recipe.stages.len(),
+        "step_count": steps.len(),
         "total_timed_secs": total_timed_secs,
-        "stages": recipe.stages.iter().map(|s| stage_attributes(s, unit)).collect::<Vec<_>>(),
+        "steps": steps
+            .into_iter()
+            .map(|r| step_attributes(&recipe.stages[r], unit))
+            .collect::<Vec<_>>(),
     })
 }
 
-fn stage_attributes(stage: &Stage, unit: &str) -> serde_json::Value {
+/// One step: the oven's stages it's made of, described by
+/// the last, which holds its settings (the cook after a preheat).
+fn step_attributes(step: &[Stage], unit: &str) -> serde_json::Value {
+    let stage = &step[step.len() - 1];
     serde_json::json!({
         "kind": stage.kind,
         "title": stage.title,
@@ -61,14 +70,42 @@ fn stage_attributes(stage: &Stage, unit: &str) -> serde_json::Value {
             "rear": stage.heating_element_rear.unwrap_or(true),
             "bottom": stage.heating_element_bottom.unwrap_or(true),
         },
-        "waits_for_user": stage.user_action_required.unwrap_or(false),
-        "summary": summary(stage, unit),
+        "preheat": step.len() > 1,
+        "waits_for_user": waits(step),
+        "summary": step_summary(step, unit),
     })
+}
+
+/// Whether the oven waits for the user anywhere in `step`: before it, or
+/// between its preheat and cook.
+fn waits(step: &[Stage]) -> bool {
+    step.iter().any(|s| s.user_action_required == Some(true))
+}
+
+/// One line for one step (see [`step_attributes`]), e.g.
+/// `Bake · 220 °C dry · preheat first · 25 min · waits for you`.
+pub fn step_summary(step: &[Stage], unit: &str) -> String {
+    let mut parts = summary_parts(&step[step.len() - 1], unit);
+    if step.len() > 1 {
+        parts.insert(2, "preheat first".into());
+    }
+    if waits(step) {
+        parts.push("waits for you".into());
+    }
+    parts.join(" · ")
 }
 
 /// One line per stage, e.g. `Cook · 220 °C dry · 30% steam · 25 min · waits
 /// for you`, in the oven's display unit (`"C"` or `"F"`).
 pub fn summary(stage: &Stage, unit: &str) -> String {
+    let mut parts = summary_parts(stage, unit);
+    if stage.user_action_required == Some(true) {
+        parts.push("waits for you".into());
+    }
+    parts.join(" · ")
+}
+
+fn summary_parts(stage: &Stage, unit: &str) -> Vec<String> {
     let mut parts = Vec::new();
     parts.push(match stage.title.as_deref().filter(|t| !t.is_empty()) {
         Some(title) => title.to_string(),
@@ -84,10 +121,7 @@ pub fn summary(stage: &Stage, unit: &str) -> String {
     } else if let Some(probe) = stage.probe_target_c {
         parts.push(format!("probe to {}", temperature(probe, unit)));
     }
-    if stage.user_action_required == Some(true) {
-        parts.push("waits for you".into());
-    }
-    parts.join(" · ")
+    parts
 }
 
 fn temperature(celsius: f32, unit: &str) -> String {
@@ -204,13 +238,33 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn attributes_carry_the_stages() {
+    fn attributes_carry_the_steps() {
         let mut r = recipe("1", "Bread");
         r.stages[0].duration_secs = Some(600);
         let a = attributes(&r, "C");
-        assert_eq!(a["stage_count"], 1);
+        assert_eq!(a["step_count"], 1);
         assert_eq!(a["total_timed_secs"], 600);
-        assert_eq!(a["stages"][0]["summary"], "Cook · 220 °C dry · 10 min");
+        assert_eq!(a["steps"][0]["summary"], "Cook · 220 °C dry · 10 min");
         assert_eq!(a["source"], "own");
+    }
+
+    #[test]
+    fn a_preheat_and_its_cook_are_one_step() {
+        let mut r = recipe("1", "Bread");
+        let mut cook = stage("cook");
+        cook.title = Some("Bake".into());
+        cook.duration_secs = Some(1500);
+        cook.user_action_required = Some(true);
+        r.stages = vec![stage("preheat"), cook, stage("cook")];
+        let a = attributes(&r, "C");
+        assert_eq!(a["step_count"], 2);
+        assert_eq!(a["steps"][0]["title"], "Bake");
+        assert_eq!(a["steps"][0]["preheat"], true);
+        assert_eq!(a["steps"][0]["waits_for_user"], true);
+        assert_eq!(
+            a["steps"][0]["summary"],
+            "Bake · 220 °C dry · preheat first · 25 min · waits for you"
+        );
+        assert_eq!(a["steps"][1]["preheat"], false);
     }
 }

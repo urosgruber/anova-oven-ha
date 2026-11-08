@@ -218,7 +218,7 @@ pub struct TemperatureBulbs {
 pub struct SetpointBulb {
     pub current: Temperature,
     pub setpoint: Option<Temperature>,
-    /// Wet bulb only: the oven could not wet the wick.
+    /// Wet bulb only: the oven couldn't wet the wick.
     #[serde(default)]
     pub dose_failed: bool,
 }
@@ -295,7 +295,6 @@ pub fn cook_done(oven: &OvenState) -> bool {
     cook.stage_transition_pending_user_action && oven.nodes.timer.mode == "idle" && on_last_stage
 }
 
-/// Convert a parsed [`OvenState`] into the simplified `OvenStatus` type.
 /// The faults the oven reports, as short names, in a fixed order.
 pub fn faults(oven: &OvenState) -> Vec<String> {
     let n = &oven.nodes;
@@ -303,7 +302,10 @@ pub fn faults(oven: &OvenState) -> Vec<String> {
     let sg = &n.steam_generators;
     let tb = &n.temperature_bulbs;
     [
-        (oven.system_info.as_ref().is_some_and(|i| i.triacs_failed), "triacs_failed"),
+        (
+            oven.system_info.as_ref().is_some_and(|i| i.triacs_failed),
+            "triacs_failed",
+        ),
         (he.top.failed, "top_element_failed"),
         (he.bottom.failed, "bottom_element_failed"),
         (he.rear.failed, "rear_element_failed"),
@@ -315,7 +317,12 @@ pub fn faults(oven: &OvenState) -> Vec<String> {
         (tb.dry_top.overheated, "top_overheated"),
         (tb.dry_bottom.overheated, "bottom_overheated"),
         (n.lamp.failed, "lamp_failed"),
-        (n.user_interface_circuit.as_ref().is_some_and(|u| u.communication_failed), "display_link_failed"),
+        (
+            n.user_interface_circuit
+                .as_ref()
+                .is_some_and(|u| u.communication_failed),
+            "display_link_failed",
+        ),
     ]
     .into_iter()
     .filter(|(on, _)| *on)
@@ -323,6 +330,7 @@ pub fn faults(oven: &OvenState) -> Vec<String> {
     .collect()
 }
 
+/// Convert a parsed [`OvenState`] into the simplified `OvenStatus` type.
 pub fn to_oven_status(oven: &OvenState) -> anova_oven_api::OvenStatus {
     let nodes = &oven.nodes;
     let sg = &nodes.steam_generators;
@@ -383,7 +391,10 @@ pub fn to_oven_status(oven: &OvenState) -> anova_oven_api::OvenStatus {
         water_tank_empty: nodes.water_tank.empty,
         faults: faults(oven),
         wet_bulb_dose_failed: tb.wet.dose_failed,
-        firmware_version: oven.system_info.as_ref().and_then(|i| i.firmware_version.clone()),
+        firmware_version: oven
+            .system_info
+            .as_ref()
+            .and_then(|i| i.firmware_version.clone()),
         active_stage_index,
         active_stage_id,
         cook_done: cook_done(oven),

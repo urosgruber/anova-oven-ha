@@ -159,9 +159,11 @@ types, not every field):
 - **`CookProgress`** — server-derived cook progression (recipe title,
   current stage index, total stage count, current/next stage description
   and kind, `next_stage_ready` flag for manual-advance prompts, and
-  `next_stage_prompt`, the waiting stage's note for the user). Included
-  inline on `GET /status` while a cook is active rather than requiring the
-  pico to re-decode `CurrentCook` every tick.
+  `next_stage_prompt`, the waiting stage's note for the user), and the
+  current stage and count as the user knows them (`current_step_index`,
+  `step_count`; see below). Included inline on `GET /status` while a cook
+  is active rather than requiring the pico to re-decode `CurrentCook` every
+  tick.
 - **`Recipe` + `Stage`** — saved recipe with stages. `Stage` carries
   Firestore stage id (used as `stageId` for `CMD_APO_START_STAGE` — see
   exploration note below), kind, target temperature, optional bulb mode,
@@ -183,6 +185,17 @@ All types derive `serde::Serialize` + `serde::Deserialize` with
 
 **Key design decisions:**
 - Temperatures are always Celsius; the CLI/Pico convert for display.
+- **The user sees steps; stages are the oven's.** The oven runs a preheat
+  and the cook after it as two stages; the recipe editor shows them as one
+  step. `anova_oven_api::steps` groups them the same way as the editor's
+  `toSteps`, and anything shown to the user counts and names steps: the
+  web UI, recipe validation errors, the panels, the MQTT events'
+  `step_index`, `step_count`, `current_step`, `next_step` and
+  `next_step_prompt`, the HA Step sensor and entity names, and the selected
+  recipe's `steps`. "Stage" is kept for the oven's own representation: the
+  API's `Stage`, `current_stage_index`, `stage_count` on `Recipe`,
+  `activeStageIndex`, and identifiers HA already holds (entity IDs such as
+  `button.anova_oven_next_stage`, event types such as `stage_waiting`).
 - Stages are pre-filtered to `stepType == "stage"` (directions stripped).
 - `stage_count` is included at the top of `Recipe` for list views that
   don't need to decode the full `stages` array.
@@ -314,7 +327,9 @@ with the switch in the header (°F until changed, remembered per browser), and
 are always sent as Celsius.
 
 - `/` — status (temperatures, timer, steam, probe, door, water, light, link),
-  the running cook's stage with stop and next-stage, and the light. While
+  the running cook in full (every stage, done, current and to come, with
+  each place it waits for you and its note) with stop and next-stage, and
+  the light. While
   nothing is cooking, a manual cook: a title and stages in the same editor as
   recipes, started with `POST /start`.
 - `/recipes` — the recipe list, own first then bookmarked, each by title,
@@ -332,11 +347,13 @@ are always sent as Celsius.
   steps, when the first ends on its own (timer, probe, or a preheat-only
   step at temperature), a radio picks whether the next goes straight on or
   waits for you; it's the next step's first stage's `user_action_required`.
-  The first step's flag isn't shown and is kept as saved. Each "wait for
-  you" choice (between steps, or preheat then wait) has an optional note
-  for while it waits: that stage's `prompt`, shown on the status page by
-  Start next stage (and served as `cook_progress.next_stage_prompt` for the
-  panels). Under the last
+  After a step that ends when you say, the next always waits for you, and
+  its first stage is saved with `user_action_required` set. The first step's
+  flag isn't shown and is kept as saved. Each "wait for you" (between steps,
+  after a step that ends when you say, or preheat then wait) has an optional
+  note for while it waits: that stage's `prompt`, shown on the status page by
+  Start next stage, served as `cook_progress.next_stage_prompt` for the
+  panels, and sent on MQTT's `stage_waiting` event as `next_stage_prompt`. Under the last
   step, when it ends on a timer or probe, a radio picks whether the oven
   keeps holding until you press Stop (the oven's own behaviour) or turns off:
   the last stage's `turn_off_at_end`. Each choice has a
@@ -353,8 +370,9 @@ are always sent as Celsius.
 - `ANOVA_MQTT_USERNAME`, `ANOVA_MQTT_PASSWORD`
 - `ANOVA_MQTT_TOPIC_PREFIX` — default `anova/oven`
 - `ANOVA_MQTT_DISCOVERY_PREFIX` — default `homeassistant`
-- `ANOVA_MQTT_CLIENT_ID` — default `anova-oven-server`. Two servers on one
-  broker need two IDs, or the broker drops them in turn.
+- `ANOVA_MQTT_CLIENT_ID` — default `anova-oven-server`. A second server
+  on the same broker needs its own, or the broker drops one of the two
+  again and again. It also needs its own topic and discovery prefixes.
 - `ANOVA_SAFETY_LIMIT_HOURS` — default `4`, `0` is off. Stops a dry cook
   with no timer or probe (or one that holds after its last timer) after
   this long. Sous vide has no limit.
@@ -565,6 +583,9 @@ without the prefix: `GET /status` is `GET /api/status`. (The pico's own
                           stage's id, whether or not the oven is waiting.
                           `/status` has `stage_transition_pending_user_action`
                           (and `cook_progress.next_stage_ready`) when it is.
+                          A stage with no timer or probe never sets the
+                          flag, but `next_stage_ready` is on throughout it:
+                          it only ends when the next one is started.
 - `POST /timer`         — local mode, body `{ "seconds": 90 }`: restart the
                           current stage's countdown.
 - `POST /temperature`   — local mode, body `{ "celsius": 180 }` (25–250):
@@ -822,6 +843,9 @@ Key findings carried forward:
 - **Server:** exponential backoff on WebSocket reconnect (current is a
   flat 5 s sleep), graceful SIGINT shutdown. Token-expiry handling
   already lands automatically via `maybe_refresh_session` on 401.
+- **Server:** separate the MQTT topic API from the Home Assistant
+  adapter, whose state (recipe selection, manual draft) now shares the
+  topic namespace (see [`docs/mqtt-ha-split.md`](mqtt-ha-split.md)).
 - **CLI:** richer output formatting (tables, colours), `--watch` flag,
   `--json` flag.
 - **Pico:** OTA updates (see [`docs/pico-ota.md`](pico-ota.md)),

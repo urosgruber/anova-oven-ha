@@ -2,7 +2,7 @@
 //!
 //! Every config is retained under
 //! `<discovery prefix>/<component>/anova_oven/<object>/config`. Entities
-//! only local mode can drive (next stage, lamp, set temperature, set timer)
+//! only local mode can drive (next step, lamp, set temperature, set timer)
 //! get an empty retained config in cloud mode, which removes them, so Home
 //! Assistant never shows a control the cloud will refuse.
 //!
@@ -81,7 +81,7 @@ enum Needs {
     Server,
     /// The server and the oven.
     Oven,
-    /// The server, the oven, and a stage waiting for the user.
+    /// The server, the oven, and a step waiting for the user.
     WaitingStage,
 }
 
@@ -398,7 +398,7 @@ fn entities(topics: &Topics, options: &[String], unit: &str) -> Vec<Entity> {
         entity(
             "sensor",
             "stage_ends_at",
-            "Stage ends at",
+            "Step ends at",
             Needs::Oven,
             reading(
                 topics,
@@ -420,19 +420,19 @@ fn entities(topics: &Topics, options: &[String], unit: &str) -> Vec<Entity> {
         entity(
             "sensor",
             "stage",
-            "Stage",
+            "Step",
             Needs::Oven,
             json!({
                 "state_topic": topics.state(),
                 "value_template": format!(
-                    "{{% set p = {progress} %}}{{{{ (p.current_stage_index + 1) ~ ' of ' ~ p.total_stage_count if p else none }}}}"
+                    "{{% set p = {progress} %}}{{{{ (p.current_step_index + 1) ~ ' of ' ~ p.step_count if p else none }}}}"
                 ),
             }),
         ),
         entity(
             "sensor",
             "stage_description",
-            "Stage description",
+            "Step description",
             Needs::Oven,
             json!({
                 "state_topic": topics.state(),
@@ -485,7 +485,11 @@ fn entities(topics: &Topics, options: &[String], unit: &str) -> Vec<Entity> {
             "cooking",
             "Cooking",
             Needs::Oven,
-            on_off(topics, "value_json.get('mode', 'idle') not in ['idle', 'unknown', 'descale']", Some("running")),
+            on_off(
+                topics,
+                "value_json.get('mode', 'idle') not in ['idle', 'unknown', 'descale']",
+                Some("running"),
+            ),
         ),
         entity(
             "binary_sensor",
@@ -504,7 +508,7 @@ fn entities(topics: &Topics, options: &[String], unit: &str) -> Vec<Entity> {
         entity(
             "binary_sensor",
             "next_stage_ready",
-            "Next stage ready",
+            "Next step ready",
             Needs::Oven,
             on_off(
                 topics,
@@ -513,30 +517,26 @@ fn entities(topics: &Topics, options: &[String], unit: &str) -> Vec<Entity> {
             ),
         ),
         // A part failed or overheated; the attribute names which ones.
-        entity(
-            "binary_sensor",
-            "problem",
-            "Problem",
-            Needs::Oven,
-            {
-                let mut v = on_off(topics, "value_json.get('faults')", Some("problem"));
-                v["json_attributes_topic"] = topics.state().into();
-                v["json_attributes_template"] =
-                    "{{ {'faults': value_json.get('faults', [])} | tojson }}".into();
-                v
-            },
-        ),
+        entity("binary_sensor", "problem", "Problem", Needs::Oven, {
+            let mut v = on_off(topics, "value_json.get('faults')", Some("problem"));
+            v["json_attributes_topic"] = topics.state().into();
+            v["json_attributes_template"] =
+                "{{ {'faults': value_json.get('faults', [])} | tojson }}".into();
+            v
+        }),
         entity(
             "sensor",
             "firmware",
             "Firmware",
             Needs::Oven,
-            json!({
-                "state_topic": topics.state(),
-                "value_template": "{{ value_json.get('firmware_version') }}",
-                "entity_category": "diagnostic",
-                "icon": "mdi:chip",
-            }),
+            reading(
+                topics,
+                "firmware_version",
+                json!({
+                    "entity_category": "diagnostic",
+                    "icon": "mdi:chip",
+                }),
+            ),
         ),
         entity(
             "binary_sensor",
@@ -696,7 +696,7 @@ fn entities(topics: &Topics, options: &[String], unit: &str) -> Vec<Entity> {
         local(
             "button",
             "next_stage",
-            "Next stage",
+            "Next step",
             Needs::WaitingStage,
             json!({ "command_topic": topics.command("next_stage") }),
         ),

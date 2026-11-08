@@ -102,16 +102,21 @@ def message(hass, a):
     """(title, text) for an event, or None for events that stay quiet."""
     kind = a.get("event_type")
     title = a.get("recipe_title") or "Oven"
-    index = a.get("stage_index")
-    count = a.get("stage_count") or 0
-    current = a.get("current_stage") or ""
-    upcoming = a.get("next_stage") or ""
+    # Steps, as the card counts them: a preheat and its cook are one step.
+    index = a.get("step_index")
+    count = a.get("step_count") or 0
+    current = a.get("current_step") or ""
+    upcoming = a.get("next_step") or ""
+    prompt = (a.get("next_step_prompt") or "").strip()
+    note = f" Note: {prompt}" if prompt else ""
     if kind == "preheat_done":
         return title, f"Preheat done. The oven is at temperature. Now: {current}"
     if kind == "stage_started" and index is not None:
         return title, f"Step {index + 1} of {count} started: {current}"
     if kind == "stage_waiting" and index is not None:
-        return title, f"Step {index + 2} waits for you. Tap Start step {index + 2}. Next: {upcoming}"
+        if a.get("preheat"):
+            return title, f"Preheat done. Step {index + 1} waits for you. Tap Start cooking.{note}"
+        return title, f"Step {index + 2} waits for you. Tap Start step {index + 2}. Next: {upcoming}{note}"
     if kind == "cook_done":
         if auto_stop_on(hass):
             return title, "Timer done. The oven stopped."

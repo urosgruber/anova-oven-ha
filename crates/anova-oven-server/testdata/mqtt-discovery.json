@@ -143,7 +143,7 @@
     },
     "has_entity_name": true,
     "icon": "mdi:hand-back-right-outline",
-    "name": "Next stage ready",
+    "name": "Next step ready",
     "origin": {
       "name": "anova-oven-server",
       "sw_version": "x"
@@ -242,7 +242,7 @@
     },
     "has_entity_name": true,
     "icon": "mdi:skip-next",
-    "name": "Next stage",
+    "name": "Next step",
     "origin": {
       "name": "anova-oven-server",
       "sw_version": "x"
@@ -1045,14 +1045,14 @@
     },
     "has_entity_name": true,
     "icon": "mdi:stairs",
-    "name": "Stage",
+    "name": "Step",
     "origin": {
       "name": "anova-oven-server",
       "sw_version": "x"
     },
     "state_topic": "anova/oven/state",
     "unique_id": "anova_oven_stage",
-    "value_template": "{% set p = value_json.get('cook_progress') %}{{ (p.current_stage_index + 1) ~ ' of ' ~ p.total_stage_count if p else none }}"
+    "value_template": "{% set p = value_json.get('cook_progress') %}{{ (p.current_step_index + 1) ~ ' of ' ~ p.step_count if p else none }}"
   },
   "homeassistant/sensor/anova_oven/stage_description/config": {
     "availability": [
@@ -1076,7 +1076,7 @@
     },
     "has_entity_name": true,
     "icon": "mdi:text-box-outline",
-    "name": "Stage description",
+    "name": "Step description",
     "origin": {
       "name": "anova-oven-server",
       "sw_version": "x"
@@ -1107,7 +1107,7 @@
     },
     "device_class": "timestamp",
     "has_entity_name": true,
-    "name": "Stage ends at",
+    "name": "Step ends at",
     "origin": {
       "name": "anova-oven-server",
       "sw_version": "x"

@@ -57,13 +57,22 @@ mod tests {
         }
     }
 
-    /// A real frame from a descale (firmware 2.1.16, 2026-11-07).
+    /// A real state report from the middle of a descale (firmware 2.1.16).
     const DESCALE: &str = include_str!("../../testdata/device-state-descale.json");
 
     #[test]
-    fn a_descale_frame_parses_as_descaling_with_no_faults() {
-        let status = crate::protocol::to_oven_status(&parse_state(DESCALE));
-        assert!(status.is_descaling() && !status.is_cooking());
+    fn a_descale_report_is_descaling_not_cooking() {
+        let status = to_oven_status(&parse_state(DESCALE));
+        assert_eq!(status.mode, "descale");
+        assert!(status.is_descaling());
+        assert!(!status.is_cooking());
+        assert_eq!(status.phase(), "Descaling");
+        assert!(status.boiler_descale_required);
+    }
+
+    #[test]
+    fn a_healthy_oven_reports_no_faults_and_its_firmware() {
+        let status = to_oven_status(&parse_state(COOKING));
         assert!(status.faults.is_empty());
         assert!(!status.wet_bulb_dose_failed);
         assert_eq!(status.firmware_version.as_deref(), Some("2.1.16"));
@@ -71,7 +80,7 @@ mod tests {
 
     #[test]
     fn fault_flags_become_fault_names() {
-        let mut v: serde_json::Value = serde_json::from_str(DESCALE).unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(COOKING).unwrap();
         let d = &mut v["data"];
         d["systemInfo"]["triacsFailed"] = true.into();
         d["nodes"]["heatingElements"]["rear"]["failed"] = true.into();
@@ -79,10 +88,16 @@ mod tests {
         d["nodes"]["temperatureBulbs"]["dryTop"]["overheated"] = true.into();
         d["nodes"]["temperatureBulbs"]["wet"]["doseFailed"] = true.into();
         d["nodes"]["userInterfaceCircuit"]["communicationFailed"] = true.into();
-        let status = crate::protocol::to_oven_status(&parse_state(&v.to_string()));
+        let status = to_oven_status(&parse_state(&v.to_string()));
         assert_eq!(
             status.faults,
-            ["triacs_failed", "rear_element_failed", "boiler_overheated", "top_overheated", "display_link_failed"]
+            [
+                "triacs_failed",
+                "rear_element_failed",
+                "boiler_overheated",
+                "top_overheated",
+                "display_link_failed"
+            ]
         );
         assert!(status.wet_bulb_dose_failed);
     }
