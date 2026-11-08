@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.22.1
+
+- Fix: on the App's web page ("Oven (debug)"), an existing recipe did
+  not open, and Save and Delete failed. The page asked for a wrong
+  address.
+
 ## 0.22.0
 
 The server follows the newest upstream version. Upstream merged the
