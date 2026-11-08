@@ -1406,6 +1406,9 @@ mod tests {
             next_stage_ready: false,
             next_stage_description: None,
             next_stage_prompt: None,
+            // The preheat and its cook: one step.
+            current_step_index: 0,
+            step_count: 1,
         });
         let v = state_json(Some(&status), None, true, None, Some(400));
         assert_eq!(v["phase"], "Cooking");
