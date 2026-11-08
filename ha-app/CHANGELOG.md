@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.22.0
+
+The server follows the newest upstream version. Upstream merged the
+four changes from this App (descale, faults, MQTT client ID, debug log)
+and fixed one bug in them.
+
+- Fix: before the oven's first report, the Problem and Firmware entities
+  made template errors in the Home Assistant log.
+- A preheat and the cook after it now count as one step everywhere: the
+  Stage sensor, the card and the notifications. A recipe with a preheat
+  no longer shows "step 2 of 3" for what the card shows as step 1.
+- Card: during a preheat, the Next button says "Skip preheat" (or "Start
+  cooking" when the cook waits for you).
+- Notifications: a preheat that waits for you says "Preheat done. Step 1
+  waits for you." A note on the waiting step is added to the text.
+- Some entity names say "step" instead of "stage" (for example "Step",
+  "Next step"). The entity IDs stay the same.
+- From upstream: a step that holds until you go on, the whole running
+  recipe on the App's web page, and copy a recipe from its page.
+
 ## 0.21.0
 
 - Emergency power cut through a smart plug. Set `power_switch` (and
