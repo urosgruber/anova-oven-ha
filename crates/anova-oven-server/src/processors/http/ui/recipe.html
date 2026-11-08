@@ -106,7 +106,7 @@
           const created = await api("POST", "/recipes", body);
           location.href = `recipes/${encodeURIComponent(created.id)}?saved=1`;
         } else {
-          recipe = await api("PATCH", `recipes/${encodeURIComponent(recipe.id)}`, body);
+          recipe = await api("PATCH", `/recipes/${encodeURIComponent(recipe.id)}`, body);
           editor.setStages(recipe.stages);
           markSaved();
           showMessage(message, "Saved", "ok");
@@ -143,7 +143,7 @@
     $("delete").onclick = async () => {
       if (!confirm(`Delete “${recipe.title}”? This can't be undone.`)) return;
       try {
-        await api("DELETE", `recipes/${encodeURIComponent(recipe.id)}`);
+        await api("DELETE", `/recipes/${encodeURIComponent(recipe.id)}`);
         location.href = "recipes";
       } catch (e) {
         showMessage(message, e.message);
@@ -154,7 +154,7 @@
       try {
         recipe = isNew
           ? { title: "", stages: [], source: "own" }
-          : await api("GET", `recipes/${encodeURIComponent(segment)}`);
+          : await api("GET", `/recipes/${encodeURIComponent(segment)}`);
       } catch (e) {
         showMessage(message, e.message);
         return;

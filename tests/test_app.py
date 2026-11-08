@@ -458,6 +458,17 @@ class Consistency(unittest.TestCase):
             with self.subTest(script=script):
                 self.assertIn(f"ha-app{script} {script}", dockerfile)
 
+    def test_web_page_api_paths_start_with_a_slash(self):
+        # api() puts "api" in front of the path, so "recipes/x" would ask for
+        # "apirecipes/x".
+        ui = os.path.join(ROOT, "crates/anova-oven-server/src/processors/http/ui")
+        for name in sorted(os.listdir(ui)):
+            if not name.endswith((".html", ".js")):
+                continue
+            for path in re.findall(r'\bapi\("[A-Z]+",\s*[`"\']([^`"\']*)', read(f"{ui}/{name}")):
+                with self.subTest(page=name, path=path):
+                    self.assertTrue(path.startswith("/"), path)
+
     def test_the_docs_list_every_notification(self):
         docs = read("ha-app/DOCS.md")
         hass = FakeHass()
