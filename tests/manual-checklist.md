@@ -40,6 +40,16 @@ quick test, set `power_cut_minutes` to 2.
 | No answer | Repeat the alarm. Do not answer. | After `power_cut_minutes`, the plug goes off and every phone gets a message. | |
 | Short drop | The oven loses Wi-Fi for less than 5 minutes during a cook. | No alarm. | |
 
+## Start later (0.23.0, after all upstream PRs are merged)
+
+The card does not show this yet. Use the Anova Oven device in HA.
+
+| Test | What to do | Expected result | Passed |
+|---|---|---|---|
+| Start in | Choose a recipe. Set "Start in minutes" to 2 and press "Start in". | Every phone gets "Scheduled cook". The oven starts after 2 minutes. | |
+| Cancel | Schedule a cook, then press "Cancel scheduled start". | The oven does not start. | |
+| Oven busy | Schedule a cook while another cook runs. | At the start time, every phone gets "The scheduled cook did not start". | |
+
 ## Tests that passed
 
 | Test | App version |
