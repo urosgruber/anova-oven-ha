@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.23.0
+
+The server follows the newest upstream version. Upstream merged the
+MQTT timeout change from this App.
+
+- New: start a cook later ("Start in" minutes, or "Start at" a time).
+  Use the Anova Oven device in Home Assistant; the card does not show it
+  yet. See "Start later" in the documentation.
+- New notifications to everyone: a cook is scheduled, and a scheduled
+  cook did not start.
+- The App refuses to start a cook while the oven descales.
+- The App's web page ("Oven (debug)") can schedule a cook too.
+
 ## 0.22.1
 
 - Fix: on the App's web page ("Oven (debug)"), an existing recipe did
