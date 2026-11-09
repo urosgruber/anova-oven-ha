@@ -157,6 +157,22 @@ class NotifyMessages(unittest.TestCase):
         self.assertIn("The oven stopped", notify.message(FakeHass(auto_stop="on"), done)[1])
         self.assertIn("until you tap Stop", notify.message(FakeHass(auto_stop="off"), done)[1])
 
+    def test_a_scheduled_cook_says_when_in_the_local_time(self):
+        now = notify.datetime(2026, 11, 9, 8, 0, tzinfo=notify.timezone.utc)
+        with mock.patch.dict(os.environ, {"TZ": "Europe/Ljubljana"}):
+            self.assertEqual(notify.local_time("2026-11-09T15:30:00Z", now), "at 16:30")
+            self.assertEqual(notify.local_time("2026-11-10T15:30:00Z", now), "on 10 Nov at 16:30")
+        self.assertEqual(notify.local_time(None, now), "later")
+        text = notify.message(FakeHass(), {"event_type": "cook_scheduled", "recipe_title": "Bread",
+                                           "at": "2026-11-09T15:30:00Z"})
+        self.assertEqual(text[0], "Bread")
+        self.assertIn("starts by itself", text[1])
+
+    def test_a_scheduled_cook_that_did_not_start_notifies(self):
+        text = notify.message(FakeHass(), {"event_type": "command_failed", "command": "scheduled_start",
+                                           "reason": "the oven is offline"})
+        self.assertEqual(text[1], "The scheduled cook did not start. Check the oven. (the oven is offline)")
+
     def test_the_recipe_is_the_title(self):
         self.assertEqual(notify.message(FakeHass(), {"event_type": "water_empty", "recipe_title": "Bread"})[0], "Bread")
 
@@ -173,6 +189,11 @@ class NotifyHandle(unittest.TestCase):
         hass = FakeHass(**FAMILY)
         sent = notify.handle(hass, trigger({"event_type": "oven_fault", "faults": ["fan_failed"],
                                             "started_by": "user-mom"}))
+        self.assertEqual(sent, ["mobile_app_moms_phone", "mobile_app_my_phone"])
+
+    def test_a_scheduled_cook_goes_to_everyone(self):
+        hass = FakeHass(**FAMILY)
+        sent = notify.handle(hass, trigger({"event_type": "cook_scheduled", "at": "2026-11-09T15:30:00Z"}))
         self.assertEqual(sent, ["mobile_app_moms_phone", "mobile_app_my_phone"])
 
     def test_the_entity_coming_back_is_not_an_event(self):

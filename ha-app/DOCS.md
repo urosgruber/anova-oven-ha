@@ -58,6 +58,26 @@ turns the limit off. The limit works only while MQTT is on. A restart of
 the App starts the clock again. If the oven does not take the stop, the
 phones get a message, and the App tries again every 5 minutes.
 
+### Start later
+
+The App can start a cook later. The card does not show this yet. Use the
+Anova Oven device in Home Assistant:
+
+- Choose the recipe with the "Recipe" select. Then set "Start in minutes"
+  and press "Start in", or set "Start at time" (`HH:MM`) and press
+  "Start at".
+- "Scheduled recipe" and "Scheduled start" show the waiting cook.
+- "Start scheduled cook now" starts it at once. "Cancel scheduled start"
+  cancels it.
+
+A scheduled cook starts with nobody at the oven. So everyone gets a
+notification when a cook is scheduled. The safety limit and the
+emergency power cut work for a scheduled cook too. If another cook or
+a descale runs at the start time, the App drops the scheduled cook. If
+the oven is offline at the start time, the App waits up to 10 minutes,
+then drops the cook. Each time, everyone gets a notification. A restart
+of the App keeps the scheduled cook.
+
 ## Notifications
 
 The App sends the oven's events to phones with the Home Assistant
@@ -68,6 +88,8 @@ Companion app:
 | Preheat done | "Preheat done. The oven is at temperature." |
 | A step without preheat reaches its temperature | "The oven is at 200 °C." |
 | The water tank is empty during a steam or sous vide step | "The water tank is empty. Fill it to keep the steam going." |
+| A cook is set to start later | "Scheduled cook. The oven starts by itself at 16:30. To cancel, use Cancel scheduled start on the Anova Oven device." |
+| A scheduled cook cannot start | "The scheduled cook did not start. Check the oven. (…)" |
 | A step starts | "Step 2 of 3 started: …" |
 | A step waits for you | "Step 2 waits for you. Tap Start step 2." |
 | The last timer ends | "Timer done. The oven stopped." (with Auto stop) |

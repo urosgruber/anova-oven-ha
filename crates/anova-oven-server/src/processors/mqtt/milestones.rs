@@ -263,7 +263,7 @@ impl Milestone {
 }
 
 /// Every `event_type` the event entity announces.
-pub const EVENT_TYPES: [&str; 11] = [
+pub const EVENT_TYPES: [&str; 12] = [
     "cook_started",
     "preheat_done",
     "stage_started",
@@ -275,6 +275,9 @@ pub const EVENT_TYPES: [&str; 11] = [
     "temp_reached",
     "water_empty",
     "oven_fault",
+    // Not a milestone of a cook: sent by the processor when a cook is set
+    // to start later.
+    "cook_scheduled",
 ];
 
 /// The milestones between two snapshots.

@@ -21,6 +21,8 @@ import os
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import websocket
 
@@ -134,6 +136,12 @@ def message(hass, a):
     if kind == "command_failed" and a.get("command") in STOPS:
         return title, ("The App could not stop the oven. Stop it on the oven. "
                        f"({a.get('reason') or 'no reason'})")
+    if kind == "cook_scheduled":
+        return title, (f"Scheduled cook. The oven starts by itself {local_time(a.get('at'))}. "
+                       "To cancel, use Cancel scheduled start on the Anova Oven device.")
+    if kind == "command_failed" and a.get("command") == "scheduled_start":
+        return title, ("The scheduled cook did not start. Check the oven. "
+                       f"({a.get('reason') or 'no reason'})")
     if kind == "water_empty":
         return title, "The water tank is empty. Fill it to keep the steam going."
     if kind == "cook_stopped":
@@ -150,6 +158,26 @@ def message(hass, a):
         return title, (f"The oven reports a fault. {names[0].upper()}{names[1:]}. "
                        "Stop the oven and check it. Do not leave it on alone.")
     return None
+
+
+def local_time(at, now=None):
+    """'at 16:30', or 'on 10 Nov at 16:30' when it is not today.
+
+    The server sends UTC. The App's TZ is the Home Assistant time zone.
+    """
+    try:
+        zone = ZoneInfo(os.environ.get("TZ") or "UTC")
+    except Exception:
+        zone = timezone.utc
+    try:
+        t = datetime.fromisoformat(str(at).replace("Z", "+00:00")).astimezone(zone)
+    except ValueError:
+        return "later"
+    today = (now or datetime.now(timezone.utc)).astimezone(zone).date()
+    clock = t.strftime("%H:%M")
+    if t.date() == today:
+        return f"at {clock}"
+    return f"on {t.day} {t.strftime('%b')} at {clock}"
 
 
 # The server's fault names (see protocol::faults), as the phone shows them.

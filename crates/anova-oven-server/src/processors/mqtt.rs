@@ -3,9 +3,9 @@
 //! Off unless `ANOVA_MQTT_URL` is set. It reads what the HTTP API serves
 //! (the read model, cook progress and the oven's connection) and sends
 //! commands through the same state-machine paths, so the two can't drift
-//! apart. See "Home Assistant over MQTT" in `docs/oven-offline-plan.md`,
-//! and `docs/mqtt-ha-split.md` for which topics are generic and which are
-//! Home Assistant's, before adding one.
+//! apart. See `docs/home-assistant.md`, and `docs/mqtt-ha-split.md` for
+//! which topics are generic and which are Home Assistant's, before adding
+//! one.
 //!
 //! Not critical: a broker outage must not take the server down. The client
 //! reconnects with backoff, and every connect republishes discovery and the
@@ -15,11 +15,12 @@ mod discovery;
 mod manual;
 mod milestones;
 mod recipes;
+mod start_later;
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anova_oven_api::{CookProgress, OvenStatus, Recipe};
+use anova_oven_api::{CookProgress, OvenStatus, Recipe, ScheduledStart};
 use rumqttc::{AsyncClient, Event, LastWill, MqttOptions, Packet, QoS};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
@@ -28,6 +29,7 @@ use crate::liveness::Liveness;
 use crate::processors::local_store::{RecipeDraft, RecipeError, RecipeFiles, RecipePatch};
 use crate::read_model::ReadModel;
 use crate::runtime::types::{CommandFailure, ControlRequest, StateMachineCommand};
+use crate::schedule::ScheduledCook;
 
 pub use discovery::Topics;
 use milestones::{Milestone, Snapshot};
@@ -55,6 +57,8 @@ pub struct MqttConfig {
     pub client_id: String,
     /// Stop a dry cook that nothing ends after this long; `None` is off.
     pub safety_limit: Option<Duration>,
+    /// Where the oven is, which "Start at 16:30" is read in.
+    pub time_zone: Option<jiff::tz::TimeZone>,
 }
 
 /// The safety limit when `ANOVA_SAFETY_LIMIT_HOURS` is not set.
@@ -86,7 +90,7 @@ fn client_id(value: Option<&str>) -> String {
 
 impl MqttConfig {
     /// From `ANOVA_MQTT_*`; `None` when `ANOVA_MQTT_URL` isn't set.
-    pub fn from_env(local: bool) -> Option<Self> {
+    pub fn from_env(local: bool, time_zone: Option<jiff::tz::TimeZone>) -> Option<Self> {
         let url = std::env::var("ANOVA_MQTT_URL").ok()?;
         Some(Self {
             url,
@@ -101,6 +105,7 @@ impl MqttConfig {
             local,
             client_id: client_id(std::env::var("ANOVA_MQTT_CLIENT_ID").ok().as_deref()),
             safety_limit: safety_limit(std::env::var("ANOVA_SAFETY_LIMIT_HOURS").ok().as_deref()),
+            time_zone,
         })
     }
 
@@ -157,11 +162,15 @@ pub async fn run(config: MqttConfig, mut sources: Sources) {
         client,
         topics: config.topics,
         local: config.local,
+        time_zone: config.time_zone,
         recipes: Vec::new(),
         options: Vec::new(),
         selected: None,
         manual: manual::Draft::default(),
         last_manual: None,
+        start_later: start_later::Draft::default(),
+        last_start_later: None,
+        last_scheduled: None,
         last_state: None,
         auto_stop: true,
         pending_started_by: None,
@@ -248,6 +257,7 @@ struct Processor {
     client: AsyncClient,
     topics: Topics,
     local: bool,
+    time_zone: Option<jiff::tz::TimeZone>,
     recipes: Vec<Recipe>,
     /// The select's options, each with its recipe ID.
     options: Vec<(String, String)>,
@@ -257,6 +267,13 @@ struct Processor {
     /// The manual cook being set up. Here for the same reasons.
     manual: manual::Draft,
     last_manual: Option<String>,
+    /// The values the "Start in" and "Start at" buttons use. Here for the
+    /// same reasons.
+    start_later: start_later::Draft,
+    last_start_later: Option<String>,
+    /// `None` until the first snapshot, so a schedule from before a restart
+    /// isn't announced again.
+    last_scheduled: Option<Option<ScheduledStart>>,
     last_state: Option<String>,
     /// Stop the oven at `cook_done`. On until the retained command says
     /// otherwise.
@@ -436,14 +453,7 @@ impl Processor {
     /// they must not wait with it. A reconnect publishes every retained
     /// topic again (`on_connected`).
     async fn publish(&self, topic: String, retain: bool, payload: impl Into<Vec<u8>>) {
-        let send = self
-            .client
-            .publish(topic.clone(), QoS::AtLeastOnce, retain, payload);
-        match tokio::time::timeout(PUBLISH_TIMEOUT, send).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => warn!(topic, error = %e, "[mqtt] publish failed"),
-            Err(_) => debug!(topic, "[mqtt] publish dropped: the broker is away"),
-        }
+        publish_within(&self.client, PUBLISH_TIMEOUT, topic, retain, payload).await;
     }
 
     /// Discovery, availability and every retained topic, then the
@@ -471,6 +481,7 @@ impl Processor {
         self.last_state = None;
         self.last_cook = None;
         self.last_manual = None;
+        self.last_start_later = None;
         self.next_stage_ready = None;
         self.on_change(sources, true).await;
     }
@@ -625,6 +636,16 @@ impl Processor {
         }
     }
 
+    /// The "Start in" and "Start at" values, if they changed.
+    async fn publish_start_later(&mut self) {
+        let state = self.start_later.state().to_string();
+        if self.last_start_later.as_deref() != Some(state.as_str()) {
+            self.publish(self.topics.start_later(), true, state.clone())
+                .await;
+            self.last_start_later = Some(state);
+        }
+    }
+
     fn unit(&self) -> String {
         self.unit.clone().unwrap_or_else(|| "C".into())
     }
@@ -673,8 +694,15 @@ impl Processor {
         let stage_started_at =
             self.stage_clock
                 .update(status.as_ref(), connected, jiff::Timestamp::now().as_second());
-        let state = state_json(status.as_ref(), model.current_cook.as_ref(), connected, ends_at, stage_started_at)
-            .to_string();
+        let state = state_json(
+            status.as_ref(),
+            model.current_cook.as_ref(),
+            connected,
+            ends_at,
+            stage_started_at,
+            model.scheduled_start.as_ref(),
+        )
+        .to_string();
         if force || self.last_state.as_deref() != Some(state.as_str()) {
             self.publish(self.topics.state(), true, state.clone()).await;
             self.last_state = Some(state);
@@ -763,7 +791,30 @@ impl Processor {
                 self.stop_reason = None;
             }
         }
+        // A new or moved scheduled cook. Not its start or cancellation: the
+        // cook's own events, or a `command_failed`, say what happened.
+        let scheduled = model.scheduled_start;
+        if let Some(prev) = &self.last_scheduled {
+            let moved = |s: &&ScheduledStart| {
+                prev.as_ref()
+                    .is_none_or(|p| (&p.at, &p.recipe_id) != (&s.at, &s.recipe_id))
+            };
+            if let Some(s) = scheduled.as_ref().filter(moved) {
+                info!(event = "cook_scheduled", at = %s.at, "[mqtt] milestone");
+                let payload = serde_json::json!({
+                    "event_type": "cook_scheduled",
+                    "recipe_title": s.title,
+                    "recipe_id": s.recipe_id,
+                    "at": s.at,
+                });
+                self.publish(self.topics.event(), false, payload.to_string())
+                    .await;
+            }
+        }
+        self.last_scheduled = Some(scheduled);
+
         self.publish_manual().await;
+        self.publish_start_later().await;
     }
 
     async fn publish_auto_stop(&self) {
@@ -907,6 +958,28 @@ impl Processor {
                 self.publish_manual().await;
                 return;
             }
+            "start_later/in_minutes" | "start_later/at_time" => {
+                let result = if name.ends_with("in_minutes") {
+                    self.start_later.set_in_minutes(&text)
+                } else {
+                    self.start_later.set_at_time(&text)
+                };
+                if let Err(e) = result {
+                    self.command_failed(&name, &e).await;
+                }
+                // Republished either way, so a refused value snaps back.
+                self.last_start_later = None;
+                self.publish_start_later().await;
+                return;
+            }
+            "start_in" | "start_at" => {
+                self.schedule_start(&name, &text, sources).await;
+                return;
+            }
+            "cancel_scheduled_start" => {
+                StateMachineCommand::CancelScheduledStart { reply: reply_tx }
+            }
+            "start_scheduled_now" => StateMachineCommand::StartScheduledNow { reply: reply_tx },
             "stop" => StateMachineCommand::StopCook { reply: reply_tx },
             "auto_stop" => {
                 match text.as_str() {
@@ -955,6 +1028,47 @@ impl Processor {
             }
             Err(_) => {
                 self.command_failed(&name, "state machine dropped the reply")
+                    .await
+            }
+        }
+    }
+}
+
+impl Processor {
+    /// `cmd/start_in` or `cmd/start_at`: set a recipe to start later.
+    async fn schedule_start(&mut self, name: &str, text: &str, sources: &Sources) {
+        let request = start_later::Request::parse(text);
+        let Some(recipe_id) = request.recipe_id.clone().or_else(|| self.selected.clone()) else {
+            self.command_failed(name, "no recipe selected").await;
+            return;
+        };
+        let when = self.start_later.when(name, &request);
+        let at = match crate::schedule::resolve(
+            &when,
+            self.time_zone.as_ref(),
+            jiff::Timestamp::now(),
+        ) {
+            Ok(at) => at,
+            Err(e) => {
+                self.command_failed(name, &e).await;
+                return;
+            }
+        };
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let cmd = StateMachineCommand::ScheduleStart {
+            at,
+            cook: ScheduledCook::Recipe { recipe_id },
+            replace: request.replace,
+            reply: reply_tx,
+        };
+        if sources.sm_cmd_tx.send(cmd).await.is_err() {
+            return;
+        }
+        match reply_rx.await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => self.command_failed(name, &e.to_string()).await,
+            Err(_) => {
+                self.command_failed(name, "state machine dropped the reply")
                     .await
             }
         }
@@ -1076,19 +1190,55 @@ fn control_request(name: &str, payload: &str) -> Result<ControlRequest, String> 
     }
 }
 
+/// Publish, but wait at most `limit` for room in the client's queue.
+///
+/// While the broker is away, the event loop sends nothing, so the queue
+/// fills, and a plain publish would then wait until the broker returns.
+/// Every other task of the processor (the oven's state, events, commands)
+/// would wait with it, and stale messages would pile up. A publish that
+/// times out is dropped: a reconnect publishes every retained topic again
+/// (`on_connected`), and an event from the outage is stale anyway.
+async fn publish_within(
+    client: &AsyncClient,
+    limit: Duration,
+    topic: String,
+    retain: bool,
+    payload: impl Into<Vec<u8>>,
+) -> bool {
+    let send = client.publish(topic.clone(), QoS::AtLeastOnce, retain, payload);
+    match tokio::time::timeout(limit, send).await {
+        Ok(Ok(())) => true,
+        Ok(Err(e)) => {
+            warn!(topic, error = %e, "[mqtt] publish failed");
+            false
+        }
+        Err(_) => {
+            debug!(topic, "[mqtt] publish dropped: the broker is away");
+            false
+        }
+    }
+}
+
 /// The state topic: the `/status` JSON plus what Home Assistant can't
 /// work out without templating every field: `connected`, `phase`,
-/// `recipe_title`, `timer_remaining_secs` and `stage_ends_at` (so the phone
-/// counts down without an update every second).
+/// `recipe_title`, `timer_remaining_secs`, `stage_ends_at` (so the phone
+/// counts down without an update every second) and `stage_started_at`. `scheduled_start` is there
+/// (`null` when there's none) even before the oven first reports.
 fn state_json(
     status: Option<&OvenStatus>,
     cook: Option<&anova_oven_api::CurrentCook>,
     connected: bool,
     ends_at: Option<i64>,
     stage_started_at: Option<i64>,
+    scheduled: Option<&ScheduledStart>,
 ) -> serde_json::Value {
+    let scheduled = serde_json::to_value(scheduled).unwrap_or_default();
     let Some(status) = status else {
-        return serde_json::json!({ "connected": connected, "mode": "unknown" });
+        return serde_json::json!({
+            "connected": connected,
+            "mode": "unknown",
+            "scheduled_start": scheduled,
+        });
     };
     let mut state = serde_json::to_value(status).unwrap_or_default();
     let remaining = status.timer_remaining_secs();
@@ -1108,6 +1258,7 @@ fn state_json(
     }
     .into();
     state["recipe_title"] = cook.map(|c| c.display_name().to_string()).into();
+    state["scheduled_start"] = scheduled;
     state["timer_remaining_secs"] = remaining.into();
     let iso = |t: Option<i64>| {
         t.and_then(|t| jiff::Timestamp::from_second(t).ok())
@@ -1121,6 +1272,21 @@ fn state_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_publish_gives_up_when_the_queue_stays_full() {
+        // An event loop that never runs, as while the broker is away: the
+        // queue holds one message, and nothing takes it out.
+        let (client, _eventloop) = AsyncClient::new(MqttOptions::new("test", "localhost", 1883), 1);
+        let limit = Duration::from_millis(50);
+        assert!(publish_within(&client, limit, "a".into(), false, "1").await);
+        let started = std::time::Instant::now();
+        assert!(!publish_within(&client, limit, "a".into(), false, "2").await);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "it must not wait for the broker"
+        );
+    }
 
     #[test]
     fn manual_cook_takes_the_cards_stages() {
@@ -1195,8 +1361,16 @@ mod tests {
 
     #[test]
     fn state_without_a_status_is_still_published() {
-        let v = state_json(None, None, false, None, None);
+        let v = state_json(None, None, false, None, None, None);
         assert_eq!(v["connected"], false);
+        assert_eq!(v["scheduled_start"], serde_json::Value::Null);
+        let scheduled = ScheduledStart {
+            at: "2026-11-07T16:30:00Z".into(),
+            title: "Bread".into(),
+            recipe_id: Some("r1".into()),
+        };
+        let v = state_json(None, None, false, None, None, Some(&scheduled));
+        assert_eq!(v["scheduled_start"]["at"], "2026-11-07T16:30:00Z");
     }
 
     #[test]
@@ -1227,6 +1401,7 @@ mod tests {
             local: true,
             client_id: "anova-oven-test".into(),
             safety_limit: None,
+            time_zone: None,
         };
         let options = config.options().unwrap();
         assert_eq!(options.broker_address(), ("broker.lan".to_string(), 1883));
@@ -1410,11 +1585,11 @@ mod tests {
             current_step_index: 0,
             step_count: 1,
         });
-        let v = state_json(Some(&status), None, true, None, Some(400));
+        let v = state_json(Some(&status), None, true, None, Some(400), None);
         assert_eq!(v["phase"], "Cooking");
         assert_eq!(v["stage_started_at"], "1970-01-01T00:06:40Z");
         status.cook_progress.as_mut().unwrap().current_stage_kind = "preheat".into();
-        assert_eq!(state_json(Some(&status), None, true, None, None)["phase"], "Preheating");
+        assert_eq!(state_json(Some(&status), None, true, None, None, None)["phase"], "Preheating");
     }
 
     #[test]
