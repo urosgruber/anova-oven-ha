@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.25.0
+
+The parts for Home Assistant only move out of the server into a new
+program, the **adapter**. The server is now closer to upstream, so each
+upstream update is easier to merge. You see no change in the card.
+
+- New sensor: "Cook stages", the running cook's steps (diagnostic). The
+  "Current recipe" sensor no longer has the steps.
+- The "Recipes" sensor stays the same entity. The adapter sends it now.
+- The card sends the preset save and delete commands to the adapter
+  (`anova/oven/ha/cmd/…`). After the update, reload the browser page
+  once: an old card in an open page cannot save or delete presets.
+- If the adapter stops, the app starts it again after 15 s.
+
 ## 0.24.0
 
 The server follows the newest upstream version. Upstream merged two
