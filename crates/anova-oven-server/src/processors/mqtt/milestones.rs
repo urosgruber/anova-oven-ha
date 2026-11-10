@@ -22,6 +22,7 @@
 use anova_oven_api::{CurrentCook, OvenStatus, Stage};
 
 use super::recipes;
+use crate::cook_progress::StageKey;
 
 /// What the milestones are worked out from.
 #[derive(Clone, Debug, Default)]
@@ -183,6 +184,14 @@ impl Snapshot {
         self.cooking && !self.wet && (self.cook_done || !self.has_end)
     }
 
+    /// The cook and stage, for the one "new cook or stage?" rule.
+    fn key(&self) -> StageKey {
+        StageKey {
+            cook_id: self.cook_key.clone(),
+            stage_index: self.stage_index,
+        }
+    }
+
     fn stage(&self, index: Option<usize>) -> Option<&Stage> {
         self.stages.get(index?)
     }
@@ -301,27 +310,23 @@ pub fn milestones(prev: &Snapshot, next: &Snapshot) -> Vec<Milestone> {
             }
         }
         (true, true) => {
-            let new_cook = matches!(
-                (&prev.cook_key, &next.cook_key),
-                (Some(a), Some(b)) if a != b
-            );
+            let (before, after) = (prev.key(), next.key());
+            let new_cook = before.new_cook(&after);
             if new_cook {
                 out.push(Milestone::CookStarted);
             }
             // No early return after a new cook: the water and fault checks
             // below still run.
             let waiting = !new_cook && !prev.next_stage_ready && next.next_stage_ready;
-            if let (false, Some(before), Some(after)) = (new_cook, prev.stage_index, next.stage_index) {
-                if before != after && !waiting {
-                    let was_preheat = prev
-                        .stage(Some(before))
-                        .is_some_and(|s| s.kind == "preheat");
-                    out.push(if was_preheat {
-                        Milestone::PreheatDone
-                    } else {
-                        Milestone::StageStarted
-                    });
-                }
+            if !new_cook && before.new_stage(&after) && !waiting {
+                let was_preheat = prev
+                    .stage(prev.stage_index)
+                    .is_some_and(|s| s.kind == "preheat");
+                out.push(if was_preheat {
+                    Milestone::PreheatDone
+                } else {
+                    Milestone::StageStarted
+                });
             }
             // A preheat stage says `preheat_done` instead.
             let preheat = next

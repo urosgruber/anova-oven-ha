@@ -61,10 +61,10 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const message = $("message");
-    // The part after "recipes/" in the path. Home Assistant ingress puts a
-    // prefix in front, so count from the end, not the start.
-    const parts = location.pathname.split("/").filter(Boolean);
-    const segment = decodeURIComponent(parts[parts.lastIndexOf("recipes") + 1] || "new");
+    // The path after the base is "recipes/<id>". Behind a reverse proxy,
+    // the base holds the prefix, so the prefix may contain anything.
+    const local = location.pathname.slice(new URL(document.baseURI).pathname.length);
+    const segment = decodeURIComponent(local.split("/")[1] || "new");
     const isNew = segment === "new";
     let recipe = null;
 
@@ -135,7 +135,7 @@
       clearMessage(message);
       try {
         const scheduled = await startLater(kind, recipe.title, { recipe_id: recipe.id });
-        if (scheduled) location.href = document.baseURI;
+        if (scheduled) location.href = "./";
       } catch (e) {
         showMessage(message, e.message);
       }

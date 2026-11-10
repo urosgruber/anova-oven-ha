@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.23.0";
+const CARD_VERSION = "0.24.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -423,11 +423,12 @@ class AnovaOvenCard extends HTMLElement {
     const lastEvent = (this._state("event", "cook") || {}).attributes?.event_type;
     const endsAt = this._value("sensor", "stage_ends_at");
     const timerMin = this._number("number", "set_timer");
-    // The oven's own descale program (App 0.17.0+). It is not a cook. Its
-    // start comes from the App (0.17.3+); after an App restart it is unknown.
+    // The oven's own descale program (App 0.17.0+). It is not a cook, so the
+    // App gives it no stage times. Its start is when HA saw the mode change
+    // to Descaling; an HA restart during the descale resets it.
     const modeState = this._state("sensor", "mode");
     const descaling = connected && !cooking && !!modeState && modeState.state === "Descaling";
-    const descaleStart = descaling && last.stage_started_at ? Date.parse(last.stage_started_at) : NaN;
+    const descaleStart = descaling && modeState.last_changed ? Date.parse(modeState.last_changed) : NaN;
     return {
       appUp,
       connected,

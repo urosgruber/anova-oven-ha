@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.24.0
+
+The server follows the newest upstream version. Upstream merged two
+changes from this App: stable stage times, and the web page behind a
+path prefix.
+
+- The time left and the stage start no longer jump between oven reports.
+- The stage start is empty when the App did not see the stage start, for
+  example after the oven was offline for more than 1 minute. The card
+  then counts from the cook's start.
+- The card takes the descale start from the Mode sensor. An HA restart
+  during a descale resets the "min left" estimate.
+- The App's web page ("Oven (debug)") is safer behind a proxy. It
+  refuses a prefix that points to another site.
+
 ## 0.23.0
 
 The server follows the newest upstream version. Upstream merged the

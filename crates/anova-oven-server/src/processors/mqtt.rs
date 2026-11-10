@@ -183,8 +183,6 @@ pub async fn run(config: MqttConfig, mut sources: Sources) {
         next_stage_ready: None,
         safety: SafetyClock::new(config.safety_limit),
         stop_reason: None,
-        end_anchor: None,
-        stage_clock: StageClock::default(),
     };
     let mut poll = tokio::time::interval(POLL_INTERVAL);
 
@@ -302,56 +300,6 @@ struct Processor {
     safety: SafetyClock,
     /// Why the server stopped the cook, for the `cook_stopped` that follows.
     stop_reason: Option<serde_json::Value>,
-    /// The timer value last seen and when it arrived. See [`EndAnchor`].
-    end_anchor: Option<EndAnchor>,
-    /// When the running stage started. See [`StageClock`].
-    stage_clock: StageClock,
-}
-
-/// When the running stage started. The oven counts up on its display from
-/// the start of a stage with no timer (after its preheat), but it does not
-/// report that count. So the server notes when it sees a stage begin, and
-/// the card counts from there, as the oven does.
-#[derive(Debug, Default)]
-struct StageClock {
-    /// The cook and stage last seen; `None` while idle.
-    key: Option<(Option<String>, Option<usize>)>,
-    started_at: Option<i64>,
-    /// The clock has seen at least one status. A stage that already runs
-    /// at the first status started at an unknown time.
-    watched: bool,
-}
-
-impl StageClock {
-    /// The running stage's start, in Unix seconds; `None` while idle, and
-    /// for a stage that already ran when the App started.
-    fn update(&mut self, status: Option<&OvenStatus>, connected: bool, now: i64) -> Option<i64> {
-        // Before the oven's first report, the status says nothing yet.
-        if !connected {
-            return self.started_at;
-        }
-        let watched = std::mem::replace(&mut self.watched, true);
-        // A descale counts too: the card shows how long it has run.
-        let Some(status) = status.filter(|s| s.is_cooking() || s.is_descaling()) else {
-            self.key = None;
-            self.started_at = None;
-            return None;
-        };
-        let index = status
-            .cook_progress
-            .as_ref()
-            .map(|p| p.current_stage_index)
-            .or(status.active_stage_index);
-        let key = (status.cook_id.clone(), index);
-        match &self.key {
-            // The same stage. A cook ID that arrives late is the same cook.
-            Some(k) if *k == key || (k.0.is_none() && k.1 == key.1) => {}
-            Some(_) => self.started_at = Some(now),
-            None => self.started_at = watched.then_some(now),
-        }
-        self.key = Some(key);
-        self.started_at
-    }
 }
 
 /// The safety limit: how long a dry cook that nothing ends has run.
@@ -411,38 +359,6 @@ impl SafetyClock {
         }
         self.fired = Some(now);
         Some(limit)
-    }
-}
-
-/// The oven reports the time left only now and then, but the state is
-/// published every 5 s. `now + time left` with an old report moves the end
-/// time later at every publish, then back when a new report arrives: the
-/// card's progress bar jumped. So the end time is worked out once per new
-/// report, from the moment that report arrived.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct EndAnchor {
-    current: u64,
-    total: u64,
-    /// The end time, in Unix seconds.
-    ends_at: i64,
-}
-
-impl EndAnchor {
-    /// The end time for `remaining` seconds left (of `total`), at `now`.
-    /// The same report again keeps the end time it gave the first time.
-    fn update(anchor: &mut Option<EndAnchor>, remaining: Option<u64>, total: u64, now: i64) -> Option<i64> {
-        let Some(current) = remaining else {
-            *anchor = None;
-            return None;
-        };
-        if let Some(a) = *anchor {
-            if a.current == current && a.total == total {
-                return Some(a.ends_at);
-            }
-        }
-        let a = EndAnchor { current, total, ends_at: now + current as i64 };
-        *anchor = Some(a);
-        Some(a.ends_at)
     }
 }
 
@@ -685,21 +601,10 @@ impl Processor {
             }
         }
 
-        let ends_at = EndAnchor::update(
-            &mut self.end_anchor,
-            status.as_ref().and_then(OvenStatus::timer_remaining_secs),
-            status.as_ref().map_or(0, |s| s.timer_total_secs),
-            jiff::Timestamp::now().as_second(),
-        );
-        let stage_started_at =
-            self.stage_clock
-                .update(status.as_ref(), connected, jiff::Timestamp::now().as_second());
         let state = state_json(
             status.as_ref(),
             model.current_cook.as_ref(),
             connected,
-            ends_at,
-            stage_started_at,
             model.scheduled_start.as_ref(),
         )
         .to_string();
@@ -1222,14 +1127,15 @@ async fn publish_within(
 /// The state topic: the `/status` JSON plus what Home Assistant can't
 /// work out without templating every field: `connected`, `phase`,
 /// `recipe_title`, `timer_remaining_secs`, `stage_ends_at` (so the phone
-/// counts down without an update every second) and `stage_started_at`. `scheduled_start` is there
-/// (`null` when there's none) even before the oven first reports.
+/// counts down without an update every second) and `stage_started_at` (so it
+/// can count up through a stage with no timer). Both come from the cook
+/// progress (see `cook_progress`), as ISO times, and are `null` without it.
+/// `scheduled_start` is there (`null` when there's none) even before the
+/// oven first reports.
 fn state_json(
     status: Option<&OvenStatus>,
     cook: Option<&anova_oven_api::CurrentCook>,
     connected: bool,
-    ends_at: Option<i64>,
-    stage_started_at: Option<i64>,
     scheduled: Option<&ScheduledStart>,
 ) -> serde_json::Value {
     let scheduled = serde_json::to_value(scheduled).unwrap_or_default();
@@ -1264,8 +1170,11 @@ fn state_json(
         t.and_then(|t| jiff::Timestamp::from_second(t).ok())
             .map(|t| t.to_string())
     };
-    state["stage_ends_at"] = iso(ends_at).into();
-    state["stage_started_at"] = iso(stage_started_at).into();
+    // Without the cook's progress (no current cook yet), both are `null`:
+    // an end worked out from now would move at every publish.
+    let progress = status.cook_progress.as_ref();
+    state["stage_ends_at"] = iso(progress.and_then(|p| p.stage_ends_at)).into();
+    state["stage_started_at"] = iso(progress.and_then(|p| p.stage_started_at)).into();
     state
 }
 
@@ -1327,6 +1236,41 @@ mod tests {
     }
 
     #[test]
+    fn the_state_carries_both_times_from_the_progress() {
+        let mut status = crate::cook_progress::tests::base_status();
+        status.cook_progress = Some(
+            serde_json::from_value(serde_json::json!({
+                "recipe_title": "Bread", "current_stage_index": 0, "total_stage_count": 1,
+                "current_stage_description": "200 °C", "current_stage_kind": "cook",
+                "next_stage_ready": false, "stage_started_at": 400, "stage_ends_at": 1600,
+            }))
+            .unwrap(),
+        );
+        let v = state_json(Some(&status), None, true, None);
+        assert_eq!(v["stage_ends_at"], "1970-01-01T00:26:40Z");
+        assert_eq!(v["stage_started_at"], "1970-01-01T00:06:40Z");
+        if let Some(p) = status.cook_progress.as_mut() {
+            p.stage_ends_at = None;
+            p.stage_started_at = None;
+        }
+        let v = state_json(Some(&status), None, true, None);
+        assert_eq!(v["stage_ends_at"], serde_json::Value::Null);
+        assert_eq!(v["stage_started_at"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn a_running_timer_without_the_progress_has_no_end() {
+        let mut status = crate::cook_progress::tests::base_status();
+        status.timer_mode = "running".into();
+        status.timer_total_secs = 600;
+        status.timer_current_secs = 600;
+        assert!(status.timer_remaining_secs().is_some());
+        let v = state_json(Some(&status), None, true, None);
+        assert_eq!(v["stage_ends_at"], serde_json::Value::Null);
+        assert_eq!(v["stage_started_at"], serde_json::Value::Null);
+    }
+
+    #[test]
     fn control_payloads() {
         assert_eq!(
             control_request("lamp", "on"),
@@ -1361,7 +1305,7 @@ mod tests {
 
     #[test]
     fn state_without_a_status_is_still_published() {
-        let v = state_json(None, None, false, None, None, None);
+        let v = state_json(None, None, false, None);
         assert_eq!(v["connected"], false);
         assert_eq!(v["scheduled_start"], serde_json::Value::Null);
         let scheduled = ScheduledStart {
@@ -1369,7 +1313,7 @@ mod tests {
             title: "Bread".into(),
             recipe_id: Some("r1".into()),
         };
-        let v = state_json(None, None, false, None, None, Some(&scheduled));
+        let v = state_json(None, None, false, Some(&scheduled));
         assert_eq!(v["scheduled_start"]["at"], "2026-11-07T16:30:00Z");
     }
 
@@ -1528,47 +1472,6 @@ mod tests {
     }
 
     #[test]
-    fn the_stage_clock_starts_with_each_stage_it_sees() {
-        let mut clock = StageClock::default();
-        assert_eq!(clock.update(Some(&oven("idle", None, None)), true, 100), None);
-        // The cook starts; its ID arrives a moment later.
-        assert_eq!(clock.update(Some(&oven("cook", None, Some(0))), true, 110), Some(110));
-        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(0))), true, 115), Some(110));
-        // The preheat ends: stage 2 starts.
-        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(1))), true, 400), Some(400));
-        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(1))), true, 900), Some(400));
-        assert_eq!(clock.update(Some(&oven("idle", None, None)), true, 950), None);
-    }
-
-    #[test]
-    fn the_stage_clock_does_not_guess_a_start_it_did_not_see() {
-        let mut clock = StageClock::default();
-        // Before the oven's first report: nothing is known or decided.
-        assert_eq!(clock.update(None, false, 90), None);
-        assert_eq!(clock.update(Some(&oven("idle", None, None)), false, 95), None);
-        // The App starts during a cook: the stage's start is unknown.
-        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(1))), true, 100), None);
-        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(1))), true, 200), None);
-        // The next stage starts while it watches.
-        assert_eq!(clock.update(Some(&oven("cook", Some("a"), Some(2))), true, 300), Some(300));
-    }
-
-    #[test]
-    fn stage_clock_times_a_descale() {
-        let mut clock = StageClock::default();
-        assert_eq!(clock.update(Some(&oven("idle", None, None)), true, 100), None);
-        let mut d = oven("idle", None, None);
-        d.mode = "descale".into();
-        assert_eq!(clock.update(Some(&d), true, 200), Some(200));
-        assert_eq!(clock.update(Some(&d), true, 900), Some(200));
-        assert_eq!(clock.update(Some(&oven("idle", None, None)), true, 3000), None);
-        // A descale that already runs when the App starts: start unknown.
-        let mut fresh = StageClock::default();
-        assert_eq!(fresh.update(Some(&d), true, 50), None);
-        assert_eq!(fresh.update(Some(&d), true, 60), None);
-    }
-
-    #[test]
     fn a_stage_without_a_timer_after_the_preheat_is_cooking() {
         let mut status = oven("cook", Some("a"), Some(1));
         assert_eq!(status.phase(), "Preheating", "the timer guess");
@@ -1584,27 +1487,14 @@ mod tests {
             // The preheat and its cook: one step.
             current_step_index: 0,
             step_count: 1,
+            stage_started_at: Some(400),
+            stage_ends_at: None,
         });
-        let v = state_json(Some(&status), None, true, None, Some(400), None);
+        let v = state_json(Some(&status), None, true, None);
         assert_eq!(v["phase"], "Cooking");
         assert_eq!(v["stage_started_at"], "1970-01-01T00:06:40Z");
         status.cook_progress.as_mut().unwrap().current_stage_kind = "preheat".into();
-        assert_eq!(state_json(Some(&status), None, true, None, None, None)["phase"], "Preheating");
-    }
-
-    #[test]
-    fn the_end_time_stays_put_between_oven_reports() {
-        let mut anchor = None;
-        // 600 s left at t=1000: ends at 1600.
-        assert_eq!(EndAnchor::update(&mut anchor, Some(600), 900, 1000), Some(1600));
-        // The same report, published again 5 s and 10 s later.
-        assert_eq!(EndAnchor::update(&mut anchor, Some(600), 900, 1005), Some(1600));
-        assert_eq!(EndAnchor::update(&mut anchor, Some(600), 900, 1010), Some(1600));
-        // A new report: 588 s left at t=1012.
-        assert_eq!(EndAnchor::update(&mut anchor, Some(588), 900, 1012), Some(1600));
-        // No timer: no end, and the anchor goes.
-        assert_eq!(EndAnchor::update(&mut anchor, None, 0, 1013), None);
-        assert_eq!(anchor, None);
+        assert_eq!(state_json(Some(&status), None, true, None)["phase"], "Preheating");
     }
 
     #[test]

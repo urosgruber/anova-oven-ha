@@ -59,7 +59,7 @@ h = hass({ "sensor.mode": "Descaling", "binary_sensor.descale_required": "on" })
 c.hass = h;
 check("descale with an unknown start shows only Descaling", html().includes("Descaling · ") && !html().includes("min left"));
 h = hass({ "sensor.mode": "Descaling", "binary_sensor.descale_required": "on" });
-h.states[`binary_sensor.${P}_connected`].attributes = { stage_started_at: new Date(Date.now() - 10 * 60000).toISOString() };
+h.states[`sensor.${P}_mode`].last_changed = new Date(Date.now() - 10 * 60000).toISOString();
 c.hass = h;
 check("descale shows the time left", html().includes("about 38 min left"));
 check("descale is not a cook", !html().includes("steps running") && !html().includes("Descale needed"));

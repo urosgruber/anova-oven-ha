@@ -1,6 +1,6 @@
 // Shared helpers for the UI pages. Everything goes through the JSON API
-// under api/, relative to the page's <base> (Home Assistant ingress serves
-// the UI under a prefix); temperatures there are Celsius.
+// under api/, relative to the page's <base> (a reverse proxy may serve the
+// UI under a prefix); temperatures there are Celsius.
 
 async function api(method, path, body) {
   const options = { method, headers: {} };
