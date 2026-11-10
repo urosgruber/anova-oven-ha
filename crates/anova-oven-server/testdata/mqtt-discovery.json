@@ -973,7 +973,6 @@
     },
     "has_entity_name": true,
     "icon": "mdi:chef-hat",
-    "json_attributes_topic": "anova/oven/cook/attributes",
     "name": "Current recipe",
     "origin": {
       "name": "anova-oven-server",
@@ -1108,34 +1107,6 @@
     "unique_id": "anova_oven_probe_temperature",
     "unit_of_measurement": "°C",
     "value_template": "{{ value_json.get('probe_temperature_c') }}"
-  },
-  "homeassistant/sensor/anova_oven/recipes/config": {
-    "availability": [
-      {
-        "topic": "anova/oven/availability"
-      }
-    ],
-    "availability_mode": "all",
-    "default_entity_id": "sensor.anova_oven_recipes",
-    "device": {
-      "identifiers": [
-        "anova_oven"
-      ],
-      "manufacturer": "Anova",
-      "model": "Precision Oven",
-      "name": "Anova Oven"
-    },
-    "has_entity_name": true,
-    "icon": "mdi:book-open-variant",
-    "json_attributes_topic": "anova/oven/recipes/attributes",
-    "name": "Recipes",
-    "origin": {
-      "name": "anova-oven-server",
-      "sw_version": "x"
-    },
-    "state_topic": "anova/oven/recipes",
-    "unique_id": "anova_oven_recipes",
-    "value_template": "{{ value_json | length }}"
   },
   "homeassistant/sensor/anova_oven/scheduled_recipe/config": {
     "availability": [

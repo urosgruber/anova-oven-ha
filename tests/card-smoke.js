@@ -119,7 +119,7 @@ c3._loadPreset(recipes[1]);
 check("load sous vide + probe", c3._setup.preheat === false && c3._setup.steps[0].sousVide && c3._setup.steps[0].end === "probe" && c3._setup.steps[0].probe === 48);
 c3._presetName = "New one"; c3._savePreset();
 let call = h.calls.at(-1);
-check("save publishes a new recipe", call.data.topic === "anova/oven/cmd/save_recipe" && !JSON.parse(call.data.payload).replace
+check("save publishes a new recipe", call.data.topic === "anova/oven/ha/cmd/save_recipe" && !JSON.parse(call.data.payload).replace
   && JSON.parse(call.data.payload).title === "New one");
 c3._presetName = "Pizza"; const n = h.calls.length; c3._savePreset();
 check("replacing an existing name needs a second tap", h.calls.length === n && c3._armed.key === "save");
@@ -188,7 +188,8 @@ function programFromStagesForTest(card) {
   h6 = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "1 of 4", "sensor.temperature": "143",
     "sensor.target_temperature": "176", "sensor.current_recipe": "Element prep", "sensor.stage_ends_at": new Date(Date.now() + 737000).toISOString(),
     "number.set_timer": "15" });
-  // The stages come from the server, not from the browser that started the cook.
+  // The stages come from the App, not from the browser that started the cook.
+  // Before App 0.25.0 they were on the Current recipe sensor; the card still reads them there.
   h6.states[`sensor.${P}_current_recipe`].attributes = { stages: prep.stages };
   c6.hass = h6;
   const o = c6.shadowRoot.innerHTML;
@@ -301,7 +302,7 @@ function programFromStagesForTest(card) {
   const stages = [{ kind: "cook", temperature_c: 100, steam_pct: 100, timer_added: true, duration_secs: 300 }];
   const h = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "1 of 1", "sensor.steam": "0",
     "sensor.target_temperature": "100", "sensor.current_recipe": "x", event: "cook_done" });
-  h.states[`sensor.${P}_current_recipe`].attributes = { stages };
+  h.states[`sensor.${P}_cook_stages`] = st("1", { stages });
   const c = new Card(); c.setConfig({}); c.hass = h;
   const o = c.shadowRoot.innerHTML;
   check("finished timer: the timer stays selected, Done without - and +", /class="option on"[^>]*data-key="timer"/.test(o) && o.includes(">Done<") && !o.includes('data-step="end:'));
@@ -320,7 +321,7 @@ function programFromStagesForTest(card) {
     "switch.auto_stop": "on", "sensor.target_temperature": "180", "sensor.temperature": "150" };
   // A timer cook with Auto stop on says "Stops".
   let h = hass({ ...base, "sensor.stage_ends_at": new Date(Date.now() + 600000).toISOString(), "number.set_timer": "20" });
-  h.states[`sensor.${P}_current_recipe`].attributes = { stages: [{ kind: "cook", temperature_c: 180, timer_added: true, duration_secs: 1200 }] };
+  h.states[`sensor.${P}_cook_stages`] = st("1", { stages: [{ kind: "cook", temperature_c: 180, timer_added: true, duration_secs: 1200 }] });
   let c = new Card(); c.setConfig({}); c.hass = h;
   check("auto stop on: the last step says Stops HH:MM", /Stops \d\d:\d\d/.test(c.shadowRoot.innerHTML));
   c._panel = "maintenance"; c._render();
@@ -330,7 +331,7 @@ function programFromStagesForTest(card) {
   // No end: the time counts up from the cook's start.
   h = hass({ ...base });
   h.states[`binary_sensor.${P}_cooking`] = at("on");
-  h.states[`sensor.${P}_current_recipe`].attributes = { stages: [{ kind: "cook", temperature_c: 180 }] };
+  h.states[`sensor.${P}_cook_stages`] = st("1", { stages: [{ kind: "cook", temperature_c: 180 }] });
   c = new Card(); c.setConfig({}); c.hass = h;
   let o = c.shadowRoot.innerHTML;
   check("no end: the time counts up", /12:3\d in/.test(o) && /Since \d\d:\d\d/.test(o) && !o.includes('data-step="end:'));
@@ -340,7 +341,7 @@ function programFromStagesForTest(card) {
   check("no end: counts from the step's start", /2:3[67] in/.test(o));
   // Sous vide: the wet bulb and the stage's target, in 0.1 °C steps.
   h = hass({ ...base, "sensor.wet_bulb_temperature": "55.43", "sensor.target_temperature": "unknown" });
-  h.states[`sensor.${P}_current_recipe`].attributes = { stages: [{ kind: "cook", temperature_c: 56.5, temperature_bulbs_mode: "wet", steam_pct: 100 }] };
+  h.states[`sensor.${P}_cook_stages`] = st("1", { stages: [{ kind: "cook", temperature_c: 56.5, temperature_bulbs_mode: "wet", steam_pct: 100 }] });
   c = new Card(); c.setConfig({}); c.hass = h;
   check("sous vide cook: wet bulb → stage target", c.shadowRoot.innerHTML.includes("55.4 → 56.5 °C"));
   c._step("temp", 1, c._liveModel());
@@ -443,7 +444,7 @@ function programFromStagesForTest(card) {
     const h = hass({ "binary_sensor.cooking": "on", "sensor.mode": "Cooking", "sensor.stage": "1 of 1",
       "sensor.stage_ends_at": new Date(Date.now() + 300000).toISOString(), "number.set_timer": "60",
       "sensor.current_recipe": "Manual cook" });
-    h.states[`sensor.${P}_current_recipe`].attributes = { stages: [{ kind: "cook", temperature_c: 180, timer_added: true, duration_secs: 3600 }] };
+    h.states[`sensor.${P}_cook_stages`] = st("1", { stages: [{ kind: "cook", temperature_c: 180, timer_added: true, duration_secs: 3600 }] });
     h.states[`binary_sensor.${P}_connected`].attributes = { ...link };
     return h;
   };
@@ -520,7 +521,7 @@ function programFromStagesForTest(card) {
   ];
   const cook = (over) => {
     const h = hass({ "binary_sensor.cooking": "on", "sensor.current_recipe": "Bread", ...over });
-    h.states[`sensor.${P}_current_recipe`].attributes = { stages };
+    h.states[`sensor.${P}_cook_stages`] = st("1", { stages });
     const c = new Card(); store["anova-oven-card:setup"] = null; c.setConfig({}); c.hass = h;
     return c;
   };

@@ -41,20 +41,12 @@ impl Topics {
     pub fn selected(&self) -> String {
         self.under("recipe/selected")
     }
-    /// Every recipe with its stages, as the Recipes sensor's attributes.
-    pub fn recipes_attributes(&self) -> String {
-        self.under("recipes/attributes")
-    }
     pub fn selected_attributes(&self) -> String {
         self.under("recipe/selected/attributes")
     }
     /// The Auto stop switch's state, which the server owns.
     pub fn auto_stop(&self) -> String {
         self.under("auto_stop")
-    }
-    /// The running cook's stages, as the Current recipe sensor's attributes.
-    pub fn cook_attributes(&self) -> String {
-        self.under("cook/attributes")
     }
     pub fn manual(&self) -> String {
         self.under("manual")
@@ -428,11 +420,7 @@ fn entities(topics: &Topics, options: &[String], unit: &str) -> Vec<Entity> {
             "current_recipe",
             "Current recipe",
             Needs::Oven,
-            reading(
-                topics,
-                "recipe_title",
-                json!({ "json_attributes_topic": topics.cook_attributes() }),
-            ),
+            reading(topics, "recipe_title", json!({})),
         ),
         entity(
             "sensor",
@@ -466,20 +454,6 @@ fn entities(topics: &Topics, options: &[String], unit: &str) -> Vec<Entity> {
             json!({
                 "state_topic": topics.selected(),
                 "json_attributes_topic": topics.selected_attributes(),
-            }),
-        ),
-        // The count of recipes; the attributes carry every recipe with its
-        // stages, for the dashboard card's presets.
-        entity(
-            "sensor",
-            "recipes",
-            "Recipes",
-            Needs::Server,
-            json!({
-                "state_topic": topics.recipes(),
-                "value_template": "{{ value_json | length }}",
-                "json_attributes_topic": topics.recipes_attributes(),
-                "icon": "mdi:book-open-variant",
             }),
         ),
         // Binary sensors.

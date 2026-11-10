@@ -57,4 +57,11 @@ if bashio::config.true 'notify'; then
   ( while true; do python3 /notify.py; sleep 15; done ) &
 fi
 
+# The Home Assistant adapter (adapter.py): the Recipes and Cook stages
+# sensors and the card's recipe commands, through the server's HTTP API.
+# It runs beside the server; if it ends, it starts again after 15 s.
+if [ -n "${ANOVA_MQTT_URL:-}" ]; then
+  ( while true; do python3 /adapter.py; sleep 15; done ) &
+fi
+
 exec /usr/bin/anova-oven-server

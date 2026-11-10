@@ -32,7 +32,7 @@
  * mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.24.0";
+const CARD_VERSION = "0.25.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -49,7 +49,7 @@ const WATCHED = [
   "binary_sensor.water_tank_empty", "binary_sensor.descale_required", "light.lamp", "event.cook",
   "sensor.mode", "sensor.temperature", "sensor.target_temperature", "sensor.probe_temperature", "sensor.steam",
   "sensor.stage_ends_at", "sensor.stage", "sensor.stage_description", "sensor.current_recipe", "number.set_timer",
-  "sensor.recipes", "switch.auto_stop", "sensor.wet_bulb_temperature", "binary_sensor.problem",
+  "sensor.recipes", "sensor.cook_stages", "switch.auto_stop", "sensor.wet_bulb_temperature", "binary_sensor.problem",
 ];
 
 // The oven runs any one or two of its three elements.
@@ -469,8 +469,9 @@ class AnovaOvenCard extends HTMLElement {
       stage: this._value("sensor", "stage"),
       stageDescription: this._value("sensor", "stage_description"),
       recipe: this._value("sensor", "current_recipe"),
-      // The running cook's stages, from the server (the same on every device).
-      stages: (this._state("sensor", "current_recipe") || {}).attributes?.stages,
+      // The running cook's stages, from the App (the same on every device).
+      // Before App 0.25.0, they were on the Current recipe sensor.
+      stages: (this._state("sensor", "cook_stages") || this._state("sensor", "current_recipe") || {}).attributes?.stages,
       nextReady: this._on("binary_sensor", "next_stage_ready"),
       door: this._on("binary_sensor", "door"),
       lamp: this._on("light", "lamp"),
@@ -671,7 +672,7 @@ class AnovaOvenCard extends HTMLElement {
     const exists = this._recipes().some((r) => r.title === name);
     const save = () => {
       this._call("mqtt", "publish", {
-        topic: `${this._config.mqtt_prefix}/cmd/save_recipe`,
+        topic: `${this._config.mqtt_prefix}/ha/cmd/save_recipe`,
         payload: JSON.stringify({ title: name, stages: programStages(this._setup), ...(exists ? { replace: name } : {}) }),
       });
       this._presetName = undefined;
@@ -843,7 +844,7 @@ class AnovaOvenCard extends HTMLElement {
     root.querySelectorAll("[data-del]").forEach((b) => {
       const r = recipes[Number(b.dataset.del)];
       b.onclick = () => this._confirm(`del:${r.title}`, () => this._call("mqtt", "publish", {
-        topic: `${this._config.mqtt_prefix}/cmd/delete_recipe`, payload: r.title }));
+        topic: `${this._config.mqtt_prefix}/ha/cmd/delete_recipe`, payload: r.title }));
     });
     if ($("tools-close")) $("tools-close").onclick = () => { this._panel = null; this._render(); };
     if ($("prep")) $("prep").onclick = () => this._startPrep();

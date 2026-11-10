@@ -18,7 +18,7 @@ RUN cargo build --release --locked -p anova-oven-server
 
 FROM ${BUILD_FROM}
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates libssl3 python3 python3-websocket \
+ && apt-get install -y --no-install-recommends ca-certificates libssl3 python3 python3-websocket python3-paho-mqtt \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/anova-oven-server /usr/bin/anova-oven-server
 # The dashboard card ships with the app. A card-only change reuses the
@@ -26,6 +26,7 @@ COPY --from=build /src/target/release/anova-oven-server /usr/bin/anova-oven-serv
 COPY dist/anova-oven-card.js /usr/share/anova-oven/anova-oven-card.js
 COPY ha-app/register_card.py /register_card.py
 COPY ha-app/notify.py /notify.py
+COPY ha-app/adapter.py /adapter.py
 COPY ha-app/run.sh /run.sh
 RUN chmod a+x /run.sh
 

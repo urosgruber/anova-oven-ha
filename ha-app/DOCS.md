@@ -21,6 +21,15 @@ Supervisor gives the app its MQTT login, so you do not create a user.
 The sidebar page **Oven (debug)** is the server's built-in web page. Only
 admins see it. Use the dashboard card for daily cooking.
 
+The app runs two programs. The **server** is the same as upstream
+(anova-oven-rs): it connects the oven and creates most entities. The
+**adapter** adds what only the dashboard card needs: the "Recipes" and
+"Cook stages" sensors, and the save and delete commands for presets. It
+uses the server's API inside the app and its own MQTT topics under
+`anova/oven/ha/`. If the adapter stops, the app starts it again after
+15 s. Until then, the two sensors are unavailable, and the oven works as
+usual.
+
 ## Dashboard card
 
 The app installs its own dashboard card at every start. It copies the card
@@ -222,7 +231,9 @@ probe" works only with the probe plugged in.
 The book button (left of the steps) opens the presets in the same space:
 start a preset (play), load it into the editor (with Undo), save the
 current steps under a name, or delete one (tap twice). Presets are the
-app's recipes; the Recipes sensor carries them with their steps.
+app's recipes; the Recipes sensor carries them with their steps. The
+"Cook stages" sensor carries the running cook's steps, so every
+dashboard shows them, not only the one that started the cook.
 
 The cog opens the maintenance panel in the same space:
 

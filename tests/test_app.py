@@ -549,5 +549,234 @@ class NoLeaks(unittest.TestCase):
         self.assertEqual(found, [], "a home address or a secret in a tracked file")
 
 
+
+# --- adapter.py --------------------------------------------------------------
+
+adapter = load("adapter", "ha-app/adapter.py")
+
+
+class FakeServer:
+    """The server's HTTP API, from a dict of recipes."""
+
+    def __init__(self, recipes=(), stages=None, down=False):
+        self.store = {r["id"]: dict(r) for r in recipes}
+        self.stages = stages
+        self.down = down
+        self.calls = []
+
+    def request(self, method, path, body=None):
+        if self.down:
+            raise OSError("connection refused")
+        self.calls.append((method, path, body))
+        if (method, path) == ("GET", "/recipes"):
+            return list(self.store.values())
+        if (method, path) == ("GET", "/current-cook"):
+            return None if self.stages is None else {"stages": self.stages}
+        if method == "POST" and path == "/recipes":
+            if not body["stages"]:
+                raise adapter.HttpError(422, "a recipe needs at least one stage")
+            rid = f"new{len(self.store)}"
+            self.store[rid] = {"id": rid, **body}
+            return self.store[rid]
+        rid = path.rsplit("/", 1)[-1]
+        if rid not in self.store:
+            raise adapter.HttpError(404, "recipe not found")
+        if method == "PATCH":
+            self.store[rid].update(body)
+            return self.store[rid]
+        if method == "DELETE":
+            del self.store[rid]
+            return None
+        raise AssertionError((method, path))
+
+    recipes = adapter.Server.recipes
+    cook_stages = adapter.Server.cook_stages
+
+
+STAGE = {"kind": "cook", "temperature_c": 200.0}
+BREADS = [
+    {"id": "b2", "title": "Bread", "stages": [STAGE]},
+    {"id": "a1", "title": "Bread", "stages": [STAGE, STAGE]},
+    {"id": "p", "title": "Pizza", "stages": [STAGE]},
+]
+
+
+def make_adapter(server):
+    sent = []
+    a = adapter.Adapter(adapter.Topics("anova/oven", "homeassistant"), server,
+                        lambda topic, payload, retain: sent.append((topic, payload, retain)))
+    return a, sent
+
+
+def published(sent, topic):
+    return [json.loads(p) for t, p, _ in sent if t == topic]
+
+
+class AdapterRecipes(unittest.TestCase):
+    def test_options_match_the_servers_select(self):
+        # Sorted by title, then ID; a duplicate title gets a suffix.
+        self.assertEqual(adapter.options(BREADS),
+                         [("Bread", "a1"), ("Bread (2)", "b2"), ("Pizza", "p")])
+
+    def test_options_rule_is_the_servers(self):
+        src = read("crates/anova-oven-server/src/processors/mqtt/recipes.rs")
+        self.assertIn('format!("{} ({nth})", recipe.title)', src)
+        self.assertIn("a.title.cmp(&b.title).then_with(|| a.id.cmp(&b.id))", src)
+
+    def test_the_sensor_lists_every_recipe_with_its_stages_once(self):
+        a, sent = make_adapter(FakeServer(BREADS))
+        a.refresh_recipes()
+        a.refresh_recipes()
+        payloads = published(sent, "anova/oven/ha/recipes")
+        self.assertEqual(len(payloads), 1, "an unchanged list is not sent again")
+        self.assertEqual([r["title"] for r in payloads[0]["recipes"]], ["Bread", "Bread (2)", "Pizza"])
+        self.assertEqual(len(payloads[0]["recipes"][0]["stages"]), 2)
+        self.assertNotIn("a1", json.dumps(payloads[0]), "recipe IDs stay in the App")
+
+    def test_a_reconnect_sends_everything_again(self):
+        a, sent = make_adapter(FakeServer(BREADS, stages=[STAGE]))
+        a.refresh_recipes()
+        a.refresh_cook()
+        a.on_connect()
+        a.refresh_recipes()
+        a.refresh_cook()
+        self.assertEqual(len(published(sent, "anova/oven/ha/recipes")), 2)
+        self.assertEqual(len(published(sent, "anova/oven/ha/cook")), 2)
+        retained = {t for t, _, r in sent if r}
+        self.assertIn("anova/oven/ha/availability", retained)
+        # The server's old retained topics are cleared.
+        self.assertIn(("anova/oven/cook/attributes", "", True), sent)
+        self.assertIn(("anova/oven/recipes/attributes", "", True), sent)
+
+    def test_cook_stages_are_empty_without_a_cook(self):
+        server = FakeServer(stages=[STAGE])
+        a, sent = make_adapter(server)
+        a.refresh_cook()
+        server.stages = None
+        a.refresh_cook()
+        self.assertEqual(published(sent, "anova/oven/ha/cook"), [{"stages": [STAGE]}, {"stages": []}])
+
+    def test_a_server_error_does_not_stop_the_adapter(self):
+        server = FakeServer(BREADS)
+        def refuse(method, path, body=None):
+            raise adapter.HttpError(500, "store error")
+        server.request = refuse
+        a, sent = make_adapter(server)
+        self.assertFalse(a.refresh_recipes())
+        a.refresh_cook()
+        self.assertEqual(sent, [])
+
+    def test_the_api_is_under_api(self):
+        self.assertIn('.nest("/api", api)', read("crates/anova-oven-server/src/processors/http.rs"))
+        self.assertIn('Server(f"http://127.0.0.1:{port}/api")', read("ha-app/adapter.py"))
+
+    def test_a_server_that_does_not_answer_changes_nothing(self):
+        server = FakeServer(BREADS, stages=[STAGE], down=True)
+        a, sent = make_adapter(server)
+        a.refresh_recipes()
+        a.refresh_cook()
+        self.assertEqual(sent, [])
+        server.down = False
+        a.refresh_recipes()
+        self.assertEqual(len(published(sent, "anova/oven/ha/recipes")), 1)
+
+
+class AdapterCommands(unittest.TestCase):
+    def failures(self, sent):
+        return [p for p in published(sent, "anova/oven/event") if p["event_type"] == "command_failed"]
+
+    def test_save_creates_a_new_recipe(self):
+        server = FakeServer(BREADS)
+        a, sent = make_adapter(server)
+        a.command("save_recipe", json.dumps({"title": "Toast", "stages": [STAGE]}).encode())
+        self.assertIn(("POST", "/recipes", {"title": "Toast", "stages": [STAGE]}), server.calls)
+        self.assertIn("Toast", [r["title"] for r in published(sent, "anova/oven/ha/recipes")[-1]["recipes"]])
+        self.assertEqual(self.failures(sent), [])
+
+    def test_save_with_replace_overwrites_the_recipe_behind_that_title(self):
+        server = FakeServer(BREADS)
+        a, sent = make_adapter(server)
+        body = {"title": "Bread (2)", "stages": [STAGE], "replace": "Bread (2)"}
+        a.command("save_recipe", json.dumps(body).encode())
+        self.assertIn(("PATCH", "/recipes/b2", {"title": "Bread (2)", "stages": [STAGE]}), server.calls)
+
+    def test_save_with_an_unknown_replace_saves_a_new_recipe(self):
+        server = FakeServer(BREADS)
+        a, _ = make_adapter(server)
+        a.command("save_recipe", json.dumps({"title": "X", "stages": [STAGE], "replace": "Gone"}).encode())
+        self.assertEqual([c[0] for c in server.calls if c[0] != "GET"], ["POST"])
+
+    def test_delete_removes_the_recipe_behind_that_title(self):
+        server = FakeServer(BREADS)
+        a, sent = make_adapter(server)
+        a.command("delete_recipe", b"Bread")
+        self.assertNotIn("a1", server.store)
+        self.assertIn("b2", server.store)
+        titles = [r["title"] for r in published(sent, "anova/oven/ha/recipes")[-1]["recipes"]]
+        self.assertEqual(titles, ["Bread", "Pizza"])
+
+    def test_failures_are_command_failed_events_with_the_servers_reason(self):
+        server = FakeServer(BREADS)
+        a, sent = make_adapter(server)
+        a.command("delete_recipe", b"Nothing")
+        a.command("save_recipe", b"{not json")
+        a.command("save_recipe", json.dumps({"title": "Empty", "stages": []}).encode())
+        a.command("save_recipe", b"\xff")
+        a.command("save_recipe", b"x" * (adapter.MAX_COMMAND_BYTES + 1))
+        a.command("rename", b"x")
+        reasons = [(f["command"], f["reason"]) for f in self.failures(sent)]
+        self.assertEqual(reasons[0], ("delete_recipe", "no recipe with that title"))
+        self.assertTrue(reasons[1][1].startswith("bad payload"))
+        self.assertEqual(reasons[2], ("save_recipe", "a recipe needs at least one stage"))
+        self.assertEqual(reasons[3], ("save_recipe", "bad payload: not UTF-8"))
+        self.assertEqual(reasons[4], ("save_recipe", "the command is too large"))
+        self.assertEqual(reasons[5], ("rename", "unknown command"))
+        self.assertTrue(all(not r for t, _, r in sent if t == "anova/oven/event"))
+
+    def test_a_server_that_does_not_answer_fails_the_command(self):
+        a, sent = make_adapter(FakeServer(BREADS, down=True))
+        a.command("delete_recipe", b"Bread")
+        self.assertTrue(self.failures(sent)[0]["reason"].startswith("the server does not answer"))
+
+    def test_command_failed_is_a_server_event_type(self):
+        self.assertIn("command_failed", event_types())
+
+
+class AdapterDiscovery(unittest.TestCase):
+    def test_the_recipes_sensor_keeps_its_entity(self):
+        configs = dict(adapter.discovery(adapter.Topics("anova/oven", "homeassistant")))
+        recipes = configs["homeassistant/sensor/anova_oven/recipes/config"]
+        self.assertEqual(recipes["unique_id"], "anova_oven_recipes")
+        self.assertEqual(recipes["device"], {"identifiers": ["anova_oven"]})
+        self.assertEqual(recipes["state_topic"], "anova/oven/ha/recipes")
+        stages = configs["homeassistant/sensor/anova_oven/cook_stages/config"]
+        self.assertEqual(stages["value_template"], "{{ value_json.stages | length }}")
+        # Unavailable when the server or the adapter is away.
+        self.assertEqual({a["topic"] for a in stages["availability"]},
+                         {"anova/oven/availability", "anova/oven/ha/availability"})
+
+    def test_the_server_no_longer_announces_the_adapters_sensors(self):
+        snapshot = read("crates/anova-oven-server/testdata/mqtt-discovery.json")
+        self.assertNotIn("sensor/anova_oven/recipes/config", snapshot)
+        self.assertNotIn("cook_stages", snapshot)
+
+    def test_the_card_uses_the_adapters_topics_and_sensor(self):
+        card = read("dist/anova-oven-card.js")
+        for name in ("save_recipe", "delete_recipe"):
+            self.assertIn(f"mqtt_prefix}}/ha/cmd/{name}`", card)
+            self.assertNotIn(f"mqtt_prefix}}/cmd/{name}`", card)
+        self.assertIn('this._state("sensor", "cook_stages")', card)
+
+    def test_the_app_runs_the_adapter(self):
+        self.assertIn("python3 /adapter.py", read("ha-app/run.sh"))
+        dockerfile = read("ha-app/Dockerfile")
+        self.assertIn("COPY ha-app/adapter.py /adapter.py", dockerfile)
+        self.assertIn("python3-paho-mqtt", dockerfile)
+
+    def test_the_broker_address(self):
+        self.assertEqual(adapter.broker("mqtt://core-mosquitto:1883"), ("core-mosquitto", 1883))
+        self.assertEqual(adapter.broker("mqtt://broker"), ("broker", 1883))
+
+
 if __name__ == "__main__":
     unittest.main()
