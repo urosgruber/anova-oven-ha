@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.25.1
+
+- Fix: after a Home Assistant restart, the phone messages could stop for
+  good. The notifier waited without a time limit for a Core that did not
+  answer. Now every wait has a limit: 30 s for the login and 60 s for a
+  quiet connection, then a ping. With no answer, the notifier stops and
+  the app starts it again after 15 s. With the emergency power cut on,
+  the ping runs at each 30 s alarm check.
+- A closed connection now logs "Home Assistant closed the connection",
+  not a JSON error.
+
 ## 0.25.0
 
 The parts for Home Assistant only move out of the server into a new
