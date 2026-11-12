@@ -87,6 +87,72 @@ def trigger(attributes, old="2026-11-06T10:00:00Z", new="2026-11-06T10:05:00Z"):
     }}}}
 
 
+class FakeWS:
+    """Plays a script: a string is a received frame, an exception is raised."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.sent = []
+        self.timeouts = []
+
+    def settimeout(self, value):
+        self.timeouts.append(value)
+
+    def send(self, data):
+        self.sent.append(json.loads(data))
+
+    def recv(self):
+        item = self.script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+AUTH = [json.dumps({"type": "auth_required"}), json.dumps({"type": "auth_ok"})]
+
+
+class NotifyConnection(unittest.TestCase):
+    def test_login_has_a_time_limit(self):
+        ws = FakeWS(AUTH)
+        notify.Hass(ws, "token")
+        self.assertEqual(ws.timeouts[0], notify.CONNECT_TIMEOUT)
+        self.assertEqual(ws.sent[0], {"type": "auth", "access_token": "token"})
+
+    def test_silent_core_at_login_ends_the_process(self):
+        # Core accepts the connection during its start and sends nothing.
+        with self.assertRaises(TimeoutError):
+            notify.Hass(FakeWS([TimeoutError()]), "token")
+
+    def test_closed_connection_is_a_clear_error(self):
+        # websocket-client returns "" when the server closes the socket.
+        hass = notify.Hass(FakeWS(AUTH + [""]), "token")
+        with self.assertRaisesRegex(ConnectionError, "closed"):
+            hass.receive()
+
+    def test_quiet_connection_is_checked_with_a_ping(self):
+        hass = notify.Hass(FakeWS(AUTH + [TimeoutError(), json.dumps({"type": "pong", "id": 1})]),
+                           "token")
+        self.assertIsNone(hass.receive())
+        self.assertEqual(hass.ws.sent[-1], {"type": "ping", "id": 1})
+
+    def test_no_pong_ends_the_process(self):
+        hass = notify.Hass(FakeWS(AUTH + [TimeoutError(), TimeoutError()]), "token")
+        with self.assertRaises(TimeoutError):
+            hass.receive()
+
+    def test_event_during_ping_is_kept(self):
+        event = {"type": "event", "id": 7}
+        hass = notify.Hass(FakeWS(AUTH + [TimeoutError(), json.dumps(event),
+                                          json.dumps({"type": "pong", "id": 1})]), "token")
+        self.assertIsNone(hass.receive())
+        self.assertEqual(hass.receive(), event)
+
+    def test_websocket_client_timeout_is_a_timeout(self):
+        WebSocketTimeoutException = type("WebSocketTimeoutException", (Exception,), {})
+        self.assertTrue(notify.is_timeout(WebSocketTimeoutException()))
+        self.assertFalse(notify.is_timeout(ValueError()))
+
+
 class NotifyTargets(unittest.TestCase):
     def test_a_card_cook_goes_to_the_person_who_started_it(self):
         self.assertEqual(notify.targets(FakeHass(**FAMILY), "user-mom"), ["mobile_app_moms_phone"])

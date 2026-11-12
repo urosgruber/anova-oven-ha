@@ -30,23 +30,46 @@ EVENT_ENTITY = "event.anova_oven_cook"
 AUTO_STOP = "switch.anova_oven_auto_stop"
 CONNECTED = "binary_sensor.anova_oven_connected"
 COOKING = "binary_sensor.anova_oven_cooking"
+URL = "ws://supervisor/core/websocket"
+# Every wait on Home Assistant has a limit. Without one, a connection that
+# Core accepts during its start but never answers blocks forever: the
+# process does not end, so run.sh does not start it again.
+CONNECT_TIMEOUT = 30
+# With no message for this long, ask Home Assistant for a pong. No pong
+# within the same time: the connection is dead and the process ends.
+IDLE_TIMEOUT = 60
 
 
 def log(msg):
     print(f"[notify] {msg}", flush=True)
 
 
+def is_timeout(error):
+    return isinstance(error, TimeoutError) or type(error).__name__ == "WebSocketTimeoutException"
+
+
 class Hass:
     """One websocket: replies by ID, events in between kept for later."""
 
-    def __init__(self):
-        self.ws = websocket.create_connection("ws://supervisor/core/websocket", timeout=None)
-        self.ws.recv()  # auth_required
-        self.ws.send(json.dumps({"type": "auth", "access_token": os.environ["SUPERVISOR_TOKEN"]}))
-        if json.loads(self.ws.recv()).get("type") != "auth_ok":
-            raise RuntimeError("Home Assistant refused the login")
+    def __init__(self, ws=None, token=None):
+        if ws is None:
+            ws = websocket.create_connection(URL, timeout=CONNECT_TIMEOUT)
+            token = os.environ["SUPERVISOR_TOKEN"]
+        self.ws = ws
         self.next_id = 0
         self.pending = []
+        self.ws.settimeout(CONNECT_TIMEOUT)
+        if self._recv().get("type") != "auth_required":
+            raise RuntimeError("Home Assistant did not ask for a login")
+        self.ws.send(json.dumps({"type": "auth", "access_token": token}))
+        if self._recv().get("type") != "auth_ok":
+            raise RuntimeError("Home Assistant refused the login")
+
+    def _recv(self):
+        raw = self.ws.recv()
+        if not raw:
+            raise ConnectionError("Home Assistant closed the connection")
+        return json.loads(raw)
 
     def send(self, payload):
         self.next_id += 1
@@ -57,17 +80,32 @@ class Hass:
     def call(self, payload):
         msg_id = self.send(payload)
         while True:
-            msg = json.loads(self.ws.recv())
+            msg = self._recv()
             if msg.get("id") == msg_id and msg.get("type") == "result":
                 return msg
             self.pending.append(msg)
 
+    def ping(self):
+        """Wait for the pong; a timeout here ends the process."""
+        msg_id = self.send({"type": "ping"})
+        while True:
+            msg = self._recv()
+            if msg.get("id") == msg_id and msg.get("type") == "pong":
+                return
+            self.pending.append(msg)
+
     def receive(self):
-        """The next message. With a timeout set on the socket, it can raise
-        websocket.WebSocketTimeoutException."""
+        """The next message, or None after a quiet period. A quiet
+        connection is checked with a ping."""
         if self.pending:
             return self.pending.pop(0)
-        return json.loads(self.ws.recv())
+        try:
+            return self._recv()
+        except Exception as e:
+            if not is_timeout(e):
+                raise
+        self.ping()
+        return None
 
 
 def targets(hass, user_id):
@@ -436,18 +474,16 @@ def main():
         "trigger": {"platform": "state", "entity_id": EVENT_ENTITY},
     })
     guard = Guard.from_env()
+    # A quiet socket wakes the loop up: for the alarm check (TICK) and for
+    # the ping that finds a dead connection (IDLE_TIMEOUT).
+    hass.ws.settimeout(TICK if guard else IDLE_TIMEOUT)
     if guard:
         hass.call({"type": "subscribe_events", "event_type": ACTION_EVENT})
-        # Wake up now and then to check the alarm, also with no events.
-        hass.ws.settimeout(TICK)
         log(f"emergency power cut on {guard.switch}, after {guard.cut_secs // 60} min "
             f"with no answer (0: never by itself)")
     log("watching the oven's events")
     while True:
-        try:
-            msg = hass.receive()
-        except websocket.WebSocketTimeoutException:
-            msg = None
+        msg = hass.receive()
         if msg:
             handle(hass, msg, guard)
         if guard:
