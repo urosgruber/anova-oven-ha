@@ -150,6 +150,106 @@ struct Session {
     peer: SocketAddr,
     ws: DeviceStream,
     log: OvenLog,
+    trace: SessionTrace,
+}
+
+/// A session that ends sooner than this after the connect is short, and its
+/// frames are logged. In the loop seen on 2026-11-15 the oven showed a new
+/// pairing PIN, closed each session about 5 s after it connected and
+/// connected again about 12 s later, for 15 minutes.
+const SHORT_SESSION: Duration = Duration::from_secs(30);
+
+/// At most this many frames are kept per session. Later ones are counted.
+const TRACE_MAX_FRAMES: usize = 40;
+
+/// A longer frame is cut to this many characters. A `state` is about 2,000.
+const TRACE_MAX_CHARS: usize = 4096;
+
+/// Short sessions in a row whose frames are logged in full. After that,
+/// each one gets a single line, until a session lasts longer again.
+const TRACE_FULL_SESSIONS: u32 = 5;
+
+/// The upgrade request and the frames of a session's first
+/// [`SHORT_SESSION`], in both directions. They are logged only when the
+/// session ends within that time; after it, they are freed.
+#[derive(Debug)]
+struct SessionTrace {
+    started: Instant,
+    frames: Vec<String>,
+    skipped: usize,
+}
+
+impl SessionTrace {
+    fn new(started: Instant) -> Self {
+        Self {
+            started,
+            frames: Vec::new(),
+            skipped: 0,
+        }
+    }
+
+    /// Keep one line, `+<seconds>s <direction> <text>`, while the session
+    /// is young.
+    fn record(&mut self, now: Instant, direction: &str, text: &str) {
+        let at = now.saturating_duration_since(self.started);
+        if at >= SHORT_SESSION {
+            self.frames = Vec::new();
+            return;
+        }
+        if self.frames.len() >= TRACE_MAX_FRAMES {
+            self.skipped += 1;
+            return;
+        }
+        let chars = text.chars().count();
+        let text = if chars > TRACE_MAX_CHARS {
+            let cut: String = text.chars().take(TRACE_MAX_CHARS).collect();
+            format!("{cut}… ({chars} chars)")
+        } else {
+            text.to_string()
+        };
+        self.frames
+            .push(format!("+{:.3}s {direction} {text}", at.as_secs_f64()));
+    }
+
+    /// Keep a frame from the oven.
+    fn record_frame(&mut self, now: Instant, msg: &Message) {
+        let text = if msg.is_ping() {
+            "ping".to_string()
+        } else if msg.is_pong() {
+            "pong".to_string()
+        } else if let Some((code, reason)) = msg.as_close() {
+            format!("close {code:?} {reason:?}")
+        } else if let Some(text) = msg.as_text() {
+            text.to_string()
+        } else {
+            format!("binary, {} bytes", msg.as_payload().len())
+        };
+        self.record(now, "in", &text);
+    }
+
+    /// The session's age and frames if it ends at `now` as a short session.
+    fn report(&self, now: Instant) -> Option<(Duration, &[String], usize)> {
+        let age = now.saturating_duration_since(self.started);
+        (age < SHORT_SESSION).then_some((age, self.frames.as_slice(), self.skipped))
+    }
+}
+
+/// The upgrade request as one line: method, path and headers. Only the
+/// device ID of the `Authorization` token is shown, never the token, and
+/// cookies are left out.
+fn describe_request<B>(request: &http::Request<B>, device_id: Option<&str>) -> String {
+    let mut line = format!("upgrade {} {}", request.method(), request.uri());
+    for (name, value) in request.headers() {
+        let value = if *name == http::header::AUTHORIZATION {
+            format!("<token, deviceId {}>", device_id.unwrap_or("unknown"))
+        } else if *name == http::header::COOKIE {
+            "<not logged>".to_string()
+        } else {
+            value.to_str().unwrap_or("<not text>").to_string()
+        };
+        line.push_str(&format!(" | {name}: {value}"));
+    }
+    line
 }
 
 pub async fn run(
@@ -168,6 +268,8 @@ pub async fn run(
     // before the connection dropped, and will list it in its next state.
     let mut pending: Vec<PendingAck> = Vec::new();
     let mut last_state_frame = Instant::now();
+    // Short sessions in a row; see [`log_short_session`].
+    let mut short_in_a_row = 0u32;
     let mut healthcheck = tokio::time::interval(config.healthcheck_interval);
     healthcheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -179,7 +281,7 @@ pub async fn run(
                 // looks like, so it replaces the old one.
                 if let Some(old) = current.take() {
                     info!(old_peer = %old.peer, new_peer = %session.peer, "[device] new connection replaces the current one");
-                    if !end_session(old, &evt_tx, &liveness).await {
+                    if !end_session(old, &evt_tx, &liveness, &mut short_in_a_row).await {
                         return;
                     }
                 }
@@ -198,9 +300,9 @@ pub async fn run(
                     "idle": REPORT_RATE_IDLE_SECS,
                     "cooking": REPORT_RATE_COOKING_SECS,
                 });
-                if let Err(e) = send_command(&mut session.ws, "CMD_APO_SET_REPORT_STATE_RATE", Some(rate)).await {
+                if let Err(e) = send_command(&mut session, "CMD_APO_SET_REPORT_STATE_RATE", Some(rate)).await {
                     warn!(error = %e, "[device] could not set the report rate; dropping connection");
-                    if !end_session(session, &evt_tx, &liveness).await {
+                    if !end_session(session, &evt_tx, &liveness, &mut short_in_a_row).await {
                         return;
                     }
                     continue;
@@ -225,7 +327,7 @@ pub async fn run(
                     Ok(true) => {}
                     Ok(false) => {
                         if let Some(session) = current.take() {
-                            if !end_session(session, &evt_tx, &liveness).await {
+                            if !end_session(session, &evt_tx, &liveness, &mut short_in_a_row).await {
                                 return;
                             }
                         }
@@ -235,10 +337,10 @@ pub async fn run(
             }
             _ = healthcheck.tick(), if current.is_some() => {
                 let session = current.as_mut().expect("guarded by is_some");
-                if let Err(e) = send_command(&mut session.ws, "CMD_APO_HEALTHCHECK", None).await {
+                if let Err(e) = send_command(session, "CMD_APO_HEALTHCHECK", None).await {
                     warn!(error = %e, "[device] healthcheck send failed; dropping connection");
                     let session = current.take().expect("guarded by is_some");
-                    if !end_session(session, &evt_tx, &liveness).await {
+                    if !end_session(session, &evt_tx, &liveness, &mut short_in_a_row).await {
                         return;
                     }
                 }
@@ -251,7 +353,7 @@ pub async fn run(
                     "[device] no state from the oven within timeout; dropping connection"
                 );
                 let session = current.take().expect("guarded by is_some");
-                if !end_session(session, &evt_tx, &liveness).await {
+                if !end_session(session, &evt_tx, &liveness, &mut short_in_a_row).await {
                     return;
                 }
             }
@@ -289,11 +391,11 @@ pub async fn run(
                 };
                 info!(id = %id, kind, "[device] sending command");
                 debug!(contents = %json, "[device] command");
-                if let Err(e) = send_text(&mut session.ws, json).await {
+                if let Err(e) = send_text(session, json).await {
                     warn!(error = %e, kind, "[device] command send failed; dropping connection");
                     let session = current.take().expect("checked above");
                     if !send_ack(&evt_tx, id, "send failed").await
-                        || !end_session(session, &evt_tx, &liveness).await
+                        || !end_session(session, &evt_tx, &liveness, &mut short_in_a_row).await
                     {
                         return;
                     }
@@ -337,6 +439,9 @@ async fn handle_message(
     liveness: &Liveness,
     last_state_frame: &mut Instant,
 ) -> Result<bool, Closed> {
+    if let Some(session) = current.as_mut() {
+        session.trace.record_frame(Instant::now(), &msg);
+    }
     if msg.is_ping() || msg.is_pong() {
         telemetry::count_ws_frame(if msg.is_ping() { "ping" } else { "pong" });
         // tokio-websockets has already queued the pong.
@@ -417,8 +522,7 @@ async fn handle_message(
                 let payload = time_zone_payload(tz, jiff::Timestamp::now());
                 info!(payload = %payload, "[device] answering timezone request");
                 let session = current.as_mut().expect("message came from this session");
-                if let Err(e) =
-                    send_command(&mut session.ws, "CMD_APO_SET_TIME_ZONE", Some(payload)).await
+                if let Err(e) = send_command(session, "CMD_APO_SET_TIME_ZONE", Some(payload)).await
                 {
                     warn!(error = %e, "[device] timezone send failed; dropping connection");
                     return Ok(false);
@@ -453,8 +557,10 @@ async fn end_session(
     session: Session,
     evt_tx: &mpsc::Sender<WsEvent>,
     liveness: &Liveness,
+    short_in_a_row: &mut u32,
 ) -> bool {
     info!(device_id = %session.device_id, peer = %session.peer, "[device] oven disconnected");
+    log_short_session(&session.trace, Instant::now(), short_in_a_row);
     let mut ws = session.ws;
     let _ = tokio::time::timeout(Duration::from_secs(1), ws.close()).await;
     liveness.set_connected(false);
@@ -462,6 +568,38 @@ async fn end_session(
     liveness.set_oven_online(false, None);
     metrics::counter!(telemetry::WS_RECONNECTS).increment(1);
     evt_tx.send(WsEvent::Disconnected).await.is_ok()
+}
+
+/// Log a session that ended within [`SHORT_SESSION`], with its frames for
+/// the first [`TRACE_FULL_SESSIONS`] in a row. A longer session resets the
+/// count.
+fn log_short_session(trace: &SessionTrace, now: Instant, short_in_a_row: &mut u32) {
+    let Some((age, frames, skipped)) = trace.report(now) else {
+        *short_in_a_row = 0;
+        return;
+    };
+    *short_in_a_row += 1;
+    let secs = format!("{:.1}", age.as_secs_f64());
+    if *short_in_a_row > TRACE_FULL_SESSIONS {
+        warn!(
+            secs,
+            in_a_row = *short_in_a_row,
+            "[device] short session; frames not logged after {TRACE_FULL_SESSIONS} in a row"
+        );
+        return;
+    }
+    warn!(
+        secs,
+        in_a_row = *short_in_a_row,
+        frames = frames.len(),
+        "[device] short session; its frames follow"
+    );
+    for frame in frames {
+        warn!(frame = %frame, "[device] short session frame");
+    }
+    if skipped > 0 {
+        warn!(skipped, "[device] short session frames not kept");
+    }
 }
 
 async fn next_message(
@@ -476,20 +614,21 @@ async fn next_message(
 /// Send `{id, type, payload}`, the device-side command envelope, with a
 /// fresh ID. For commands nobody waits on an ack for.
 async fn send_command(
-    ws: &mut DeviceStream,
+    session: &mut Session,
     kind: &str,
     payload: Option<serde_json::Value>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let json = command_json(&Uuid::new_v4().to_string(), kind, payload);
     trace!(contents = %json, "[device] sending");
-    send_text(ws, json).await
+    send_text(session, json).await
 }
 
 async fn send_text(
-    ws: &mut DeviceStream,
+    session: &mut Session,
     json: String,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    tokio::time::timeout(SEND_TIMEOUT, ws.send(Message::text(json)))
+    session.trace.record(Instant::now(), "out", &json);
+    tokio::time::timeout(SEND_TIMEOUT, session.ws.send(Message::text(json)))
         .await
         .map_err(|_| "send timed out")??;
     Ok(())
@@ -606,6 +745,7 @@ async fn handshake(
     tcp: TcpStream,
     peer: SocketAddr,
 ) -> Result<Session, Box<dyn std::error::Error + Send + Sync>> {
+    let mut trace = SessionTrace::new(Instant::now());
     let tls = acceptor.accept(tcp).await?;
     let (request, ws) = ServerBuilder::new().accept(tls).await?;
     let device_id = request
@@ -613,6 +753,11 @@ async fn handshake(
         .get(http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(device_id_from_jwt);
+    trace.record(
+        Instant::now(),
+        "in",
+        &describe_request(&request, device_id.as_deref()),
+    );
     let device_id = match device_id {
         Some(id) => id,
         None => {
@@ -625,6 +770,7 @@ async fn handshake(
         peer,
         ws,
         log: OvenLog::default(),
+        trace,
     })
 }
 

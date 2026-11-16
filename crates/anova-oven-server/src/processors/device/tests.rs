@@ -19,7 +19,11 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use tokio_rustls::rustls::{DigitallySignedStruct, SignatureScheme};
 use tokio_websockets::{ClientBuilder, Config, Message, WebSocketStream};
 
-use super::{command_json, device_id_from_jwt, run, time_zone_payload, tls_acceptor, DeviceConfig};
+use super::{
+    command_json, describe_request, device_id_from_jwt, log_short_session, run, time_zone_payload,
+    tls_acceptor, DeviceConfig, SessionTrace, SHORT_SESSION, TRACE_FULL_SESSIONS, TRACE_MAX_CHARS,
+    TRACE_MAX_FRAMES,
+};
 use crate::liveness::Liveness;
 use crate::runtime::types::{OvenControl, WsCommand, WsEvent};
 
@@ -522,4 +526,93 @@ fn command_omits_payload_when_none() {
         v,
         serde_json::json!({ "id": "x", "type": "CMD_APO_HEALTHCHECK" })
     );
+}
+
+#[test]
+fn trace_keeps_frames_with_their_time_and_direction() {
+    let t0 = tokio::time::Instant::now();
+    let mut trace = SessionTrace::new(t0);
+    trace.record(
+        t0 + Duration::from_millis(50),
+        "out",
+        r#"{"type":"CMD_APO_HEALTHCHECK"}"#,
+    );
+    trace.record_frame(t0 + Duration::from_millis(5_100), &Message::ping("x"));
+    trace.record_frame(
+        t0 + Duration::from_millis(5_900),
+        &Message::text(r#"{"action":"pairing"}"#.to_string()),
+    );
+    let (age, frames, skipped) = trace.report(t0 + Duration::from_secs(6)).unwrap();
+    assert_eq!(age, Duration::from_secs(6));
+    assert_eq!(
+        frames,
+        [
+            r#"+0.050s out {"type":"CMD_APO_HEALTHCHECK"}"#,
+            "+5.100s in ping",
+            r#"+5.900s in {"action":"pairing"}"#,
+        ]
+    );
+    assert_eq!(skipped, 0);
+}
+
+#[test]
+fn trace_is_dropped_once_the_session_is_not_short() {
+    let t0 = tokio::time::Instant::now();
+    let mut trace = SessionTrace::new(t0);
+    trace.record(t0, "in", "state");
+    trace.record(t0 + SHORT_SESSION, "in", "state");
+    assert!(trace.frames.is_empty());
+    assert!(trace.report(t0 + SHORT_SESSION).is_none());
+}
+
+#[test]
+fn trace_limits_frame_count_and_length() {
+    let t0 = tokio::time::Instant::now();
+    let mut trace = SessionTrace::new(t0);
+    trace.record(t0, "in", &"é".repeat(TRACE_MAX_CHARS + 10));
+    for _ in 0..TRACE_MAX_FRAMES + 2 {
+        trace.record(t0, "in", "x");
+    }
+    let (_, frames, skipped) = trace.report(t0).unwrap();
+    assert_eq!(frames.len(), TRACE_MAX_FRAMES);
+    assert_eq!(skipped, 3);
+    let expected = format!(
+        "+0.000s in {}… ({} chars)",
+        "é".repeat(TRACE_MAX_CHARS),
+        TRACE_MAX_CHARS + 10
+    );
+    assert_eq!(frames[0], expected);
+}
+
+#[test]
+fn request_line_hides_the_token_and_cookies() {
+    let request = http::Request::get("/devices")
+        .header("authorization", format!("Bearer {}", jwt(DEVICE_ID)))
+        .header("cookie", "session=secret")
+        .header("user-agent", "esp32")
+        .body(())
+        .unwrap();
+    let line = describe_request(&request, Some(DEVICE_ID));
+    assert_eq!(
+        line,
+        format!(
+            "upgrade GET /devices | authorization: <token, deviceId {DEVICE_ID}> \
+             | cookie: <not logged> | user-agent: esp32"
+        )
+    );
+    assert!(!line.contains("secret"));
+    assert!(!line.contains("c2lnbmF0dXJl"));
+}
+
+#[test]
+fn short_sessions_are_counted_until_a_long_one() {
+    let t0 = tokio::time::Instant::now();
+    let trace = SessionTrace::new(t0);
+    let mut in_a_row = 0;
+    for _ in 0..TRACE_FULL_SESSIONS + 2 {
+        log_short_session(&trace, t0 + Duration::from_secs(5), &mut in_a_row);
+    }
+    assert_eq!(in_a_row, TRACE_FULL_SESSIONS + 2);
+    log_short_session(&trace, t0 + SHORT_SESSION, &mut in_a_row);
+    assert_eq!(in_a_row, 0);
 }
