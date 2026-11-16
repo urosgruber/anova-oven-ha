@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.25.2
+
+- The log now shows what happens when the oven leaves soon after it
+  connects. Twice, the oven showed a new pairing PIN again and again, and
+  closed each connection about 5 s after it connected. If a connection
+  ends within 30 s, the app logs a warning with every message of that
+  connection, in both directions, with the time of each one. It also
+  logs the oven's connection request. The log never shows the oven's
+  token.
+- The app logs the messages in full for the first 5 short connections in
+  a row. After that, it logs one line for each, until a connection
+  lasts longer.
+
 ## 0.25.1
 
 - Fix: after a Home Assistant restart, the phone messages could stop for
