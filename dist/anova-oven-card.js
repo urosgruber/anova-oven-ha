@@ -28,11 +28,11 @@
  * because a higher draw means a cook may still run.
  *
  * The HA app installs this file and registers it as a dashboard resource.
- * Start publishes {"stages": [...]} to <mqtt_prefix>/cmd/start with the
- * mqtt.publish service. No external libraries.
+ * Start publishes {"title", "stages", "started_by"} to
+ * <mqtt_prefix>/cmd/start_manual with the mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.25.2";
+const CARD_VERSION = "0.26.0";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
@@ -228,7 +228,7 @@ class AnovaOvenCard extends HTMLElement {
   _publishStart(title, stages) {
     const started_by = this._hass.user ? this._hass.user.id : undefined;
     this._call("mqtt", "publish", {
-      topic: `${this._config.mqtt_prefix}/cmd/start`,
+      topic: `${this._config.mqtt_prefix}/cmd/start_manual`,
       payload: JSON.stringify({ title, stages, started_by }),
     });
   }

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.26.0
+
+The server follows the newest upstream version. Upstream merged our cook
+events and the lamp change in the web page, in their reviewed form.
+
+- The card now starts a cook with the `start_manual` command. After the
+  update, reload the browser page once. The server refuses a cook from an
+  old card page, so an old page cannot start a different cook. The phones
+  then get a "command failed" message.
+- Fix from upstream: in a cook with several stages, the server no longer
+  shows "Next stage ready" for a stage that moves on by itself.
+- Fewer false names on events: a start that the oven never ran no longer
+  names its user on a later cook. The name expires after 2 minutes.
+- A fault on an idle oven no longer names the user of the last cook.
+- Auto stop and the safety limit work as before.
+
 ## 0.25.2
 
 - The log now shows what happens when the oven leaves soon after it

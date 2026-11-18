@@ -98,6 +98,9 @@
     const $ = (id) => document.getElementById(id);
     const message = $("message");
     let status = null;
+    // A lamp change waiting for the oven's confirmation: { on, until }.
+    let lampPending = null;
+    const LAMP_CONFIRM_MS = 15000;
 
     function render() {
       if (!status) return;
@@ -373,11 +376,6 @@
         showMessage(message, e.message);
       }
     };
-
-
-    // A lamp change waiting for the oven's confirmation: { on, until }.
-    let lampPending = null;
-    const LAMP_CONFIRM_MS = 15000;
 
     async function setLamp(on) {
       lampPending = { on, until: Date.now() + LAMP_CONFIRM_MS };

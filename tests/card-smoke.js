@@ -45,6 +45,7 @@ check("step 1 shows Preheat, not Waits", html().includes('id="preheat"') && !htm
 check("start label counts steps", html().includes("Bake · 2 steps"));
 c._start();
 const payload = JSON.parse(h.calls.at(-1).data.payload);
+check("start goes to cmd/start_manual", h.calls.at(-1).data.topic.endsWith("/cmd/start_manual"));
 check("start sends preheat + 2 cook stages", payload.stages.map((x) => x.kind).join(",") === "preheat,cook,cook");
 check("step 2 waits and has its timer", payload.stages[2].user_action_required === true && payload.stages[2].duration_secs === 900);
 check("step 1 starts by itself", payload.stages[1].user_action_required === false);
