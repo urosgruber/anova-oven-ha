@@ -57,6 +57,40 @@ The local DNS server (dnsmasq) has this line in
 Anova cloud, delete the line, run `sudo systemctl reload dnsmasq`, and
 unplug the oven for 10 seconds.
 
+## When the oven shows a pairing PIN and goes offline
+
+This happened twice, in November 2026. The cause is still unknown.
+
+**What you see:**
+
+1. The oven shows a pairing PIN by itself. A few seconds later it shows a
+   new PIN, and so on.
+2. In the router's DHCP log, the oven joins WiFi again every 17-18 s.
+3. In the app log, the oven connects and closes the connection about 5 s
+   later. From version 0.25.2, the app logs each such connection with
+   `short session` and all its messages.
+4. Later, the oven may stop joining WiFi completely, even after a power
+   cycle. The oven's controls still work: open the door and the display
+   wakes up.
+
+**What to do:**
+
+1. Do not enter the PINs. Let the loop run for about 2 minutes, so the
+   app log records it. Save the app log lines that contain
+   `short session`.
+2. Unplug the oven for 10 seconds. Often the oven then connects normally.
+3. If the oven still does not join WiFi, pair it again with the official
+   Anova app, near the oven. **Keep the DNS line in place.** The app sends
+   the WiFi details to the oven over Bluetooth. The app cannot finish the
+   pairing, because the Anova cloud never sees the oven. That is expected.
+   The oven keeps the WiFi details and connects to the local server.
+4. Check that the oven connects only to the local server. The app log
+   must show `oven connected`, and the router must show no connection
+   from the oven to any other address.
+
+Do not remove the DNS line to make the pairing finish. The oven then
+talks to the Anova cloud. Remove it only if step 3 fails.
+
 ## Home Assistant app
 
 This repo is also a Home Assistant app repository (`repository.yaml`). The
