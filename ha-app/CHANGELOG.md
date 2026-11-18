@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.26.1
+
+- The card's editor setup (the steps, temperatures, steam, timers and
+  Preheat) now belongs to your Home Assistant user, not to the browser.
+  All your devices show the same setup, and a change appears on the others
+  within about a second. Each device keeps its own selected step. Other
+  users keep their own setup.
+- First start: the first device that opens the new card gives its setup
+  to your user. So open the card first on the device with the setup you
+  want to keep.
+- The card saves to Home Assistant 1 second after the last change. If Home
+  Assistant cannot save it, the card keeps the setup in the browser, as
+  before, and tries again with the next change.
+
 ## 0.26.0
 
 The server follows the newest upstream version. Upstream merged our cook

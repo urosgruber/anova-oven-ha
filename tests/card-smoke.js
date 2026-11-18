@@ -537,3 +537,106 @@ function programFromStagesForTest(card) {
   c = cook({ "sensor.mode": "Cooking", "sensor.stage": "2 of 2" });
   check("on the last step, no Next button", !c.shadowRoot.innerHTML.includes('id="next"'));
 }
+
+// The setup shared by one HA user's devices, through a fake HA user store.
+(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const KEY = "anova-oven-card:setup:anova/oven";
+  function fakeHA() {
+    const ha = { data: {}, subs: [], writes: 0, fail: false, refuse: false };
+    ha.connection = {
+      subscribeMessage: (cb, msg) => {
+        if (ha.refuse) return Promise.reject(new Error("unknown command"));
+        const s = { cb, key: msg.key };
+        ha.subs.push(s);
+        cb({ value: ha.data[msg.key] ?? null });
+        return Promise.resolve(() => { ha.subs = ha.subs.filter((x) => x !== s); });
+      },
+    };
+    ha.callWS = (msg) => {
+      if (ha.fail) return Promise.reject(new Error("offline"));
+      ha.writes++;
+      ha.data[msg.key] = msg.value;
+      for (const s of ha.subs) if (s.key === msg.key) s.cb({ value: msg.value });
+      return Promise.resolve(null);
+    };
+    return ha;
+  }
+  const local = (temp, steps = 1) => JSON.stringify({ steps: Array.from({ length: steps }, () => ({ mode: MODE, temp })), sel: 0, preheat: true });
+  // A valid mode: the default setup's.
+  store["anova-oven-card:setup"] = null;
+  const probe = new Card(); probe.setConfig({});
+  const MODE = probe._setup.steps[0].mode;
+  const device = (ha, temp, config = {}) => {
+    if (temp !== undefined) store["anova-oven-card:setup"] = local(temp);
+    const d = new Card(); d.setConfig({ type: "custom:anova-oven-card", ...config });
+    const hh = hass(); hh.connection = ha.connection; hh.callWS = ha.callWS; d.hass = hh;
+    return d;
+  };
+  const temp = (d) => d._setup.steps[0].temp;
+  await wait(0);
+
+  let ha = fakeHA();
+  const a = device(ha, 222);
+  await wait(0);
+  check("sync: the first device sends its setup to an empty HA", ha.writes === 1 && ha.data[KEY].steps[0].temp === 222 && !("sel" in ha.data[KEY]));
+  const b = device(ha, 100);
+  await wait(0);
+  check("sync: a second device takes the stored setup, not its own", temp(b) === 222 && ha.writes === 1);
+  check("sync: the browser copy follows HA", JSON.parse(store["anova-oven-card:setup"]).steps[0].temp === 222);
+
+  a._update({ temp: 230 }); a._update({ temp: 231 }); a._update({ temp: 232 });
+  check("sync: no save while the edits go on", ha.writes === 1 && temp(b) === 222);
+  await wait(1100);
+  check("sync: one save for a burst of edits", ha.writes === 2);
+  check("sync: the other device shows the change live", temp(b) === 232 && b.shadowRoot.innerHTML.includes("232"));
+
+  // An old value (or an echo) during this device's own edit is not taken.
+  a._update({ temp: 240 });
+  ha.subs.find((s) => s.cb && true).cb({ value: { steps: [{ mode: MODE, temp: 199 }], preheat: true } });
+  check("sync: an incoming value during an edit waits", temp(a) === 240);
+  await wait(1100);
+  check("sync: after the save, both devices have the edit", temp(a) === 240 && temp(b) === 240 && ha.data[KEY].steps[0].temp === 240);
+
+  b._pressing = true;
+  a._update({ temp: 250 }); await wait(1100);
+  check("sync: no change under a finger", temp(b) === 240);
+  b._pressing = false; b._applyRemote();
+  check("sync: the change comes on release", temp(b) === 250);
+
+  // The selected step is per device; a removed step clamps it.
+  a._setProgram({ ...a._setup, steps: [a._setup.steps[0], { ...a._setup.steps[0], temp: 180 }], sel: 1 });
+  await wait(1100);
+  check("sync: the selected step stays on each device", a._setup.sel === 1 && b._setup.sel === 0 && b._setup.steps.length === 2);
+  b._update({ sel: 1 }); b._removeStep(); await wait(1100);
+  check("sync: a removed step moves the other device's selection", a._setup.steps.length === 1 && a._setup.sel === 0);
+
+  a._undo = { title: "Pizza", setup: a._setup };
+  b._update({ temp: 210 }); await wait(1100);
+  check("sync: a change from another device clears Undo", a._undo === null && temp(a) === 210);
+
+  ha.fail = true;
+  a._update({ temp: 215 }); await wait(1100);
+  check("sync: a failed save keeps the edit in the browser", temp(a) === 215 && JSON.parse(store["anova-oven-card:setup"]).steps[0].temp === 215);
+  ha.fail = false;
+  a._update({ temp: 216 }); await wait(1100);
+  check("sync: the next edit saves again", ha.data[KEY].steps[0].temp === 216 && temp(b) === 216);
+
+  const subs = ha.subs.length;
+  a._update({ temp: 217 }); a.disconnectedCallback();
+  check("sync: leaving the screen saves a waiting edit at once", ha.data[KEY].steps[0].temp === 217);
+  check("sync: leaving the screen stops listening", ha.subs.length === subs - 1);
+  a.connectedCallback(); clearTimeout(a._tick); await wait(0);
+  check("sync: coming back listens again", ha.subs.length === subs);
+
+  const other = device(ha, 160, { mqtt_prefix: "anova/oven2" });
+  await wait(0);
+  check("sync: a second oven has its own setup", temp(other) === 160 && ha.data["anova-oven-card:setup:anova/oven2"].steps[0].temp === 160 && temp(b) === 217);
+
+  ha = fakeHA(); ha.refuse = true;
+  const old = device(ha, 190);
+  await wait(0);
+  old._update({ temp: 191 }); await wait(1100);
+  check("sync: an HA without user storage: the browser copy works as before", temp(old) === 191 && ha.writes === 0 && JSON.parse(store["anova-oven-card:setup"]).steps[0].temp === 191);
+  check("sync: a card without an HA connection does not sync", !c._sync);
+})();

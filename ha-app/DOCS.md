@@ -228,6 +228,14 @@ temperature is in the status line), the light, and a cog. An amber dot
 on the cog means a descale is needed or the water tank is empty. "End by
 probe" works only with the probe plugged in.
 
+The steps in the editor belong to your Home Assistant user. Your phone,
+your computer and your tablet show the same steps, and a change on one
+device appears on the others within about a second. Each device keeps its
+own selected step. Other users have their own steps. A wall tablet that is
+logged in as you changes your steps too, so give it its own HA user. The
+card keeps the steps in Home Assistant's per-user frontend storage, and a
+copy in the browser for a fast start.
+
 The book button (left of the steps) opens the presets in the same space:
 start a preset (play), load it into the editor (with Undo), save the
 current steps under a name, or delete one (tap twice). Presets are the

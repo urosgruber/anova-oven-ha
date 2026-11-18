@@ -27,18 +27,26 @@
  * when the oven is offline and the plug reads no more than power_idle_w,
  * because a higher draw means a cook may still run.
  *
+ * The setup in the editor belongs to the HA user, not to the browser. The
+ * card keeps it in HA's per-user frontend storage, so all devices of one
+ * user show the same setup, and each user has their own. The browser keeps
+ * a copy for a fast start and for an HA without that storage.
+ *
  * The HA app installs this file and registers it as a dashboard resource.
  * Start publishes {"title", "stages", "started_by"} to
  * <mqtt_prefix>/cmd/start_manual with the mqtt.publish service. No external libraries.
  */
 
-const CARD_VERSION = "0.26.0";
+const CARD_VERSION = "0.26.1";
 const STOP_CONFIRM_MS = 3000;
 const LAMP_CONFIRM_MS = 15000;
 const NO_END = "Until you stop";
 // Restart power: off for this long, then on again.
 const RESTART_OFF_MS = 10000;
 const SETUP_KEY = "anova-oven-card:setup";
+// The setup is shared by one HA user's devices, in HA's per-user frontend
+// storage. HA writes that file on every save, so wait for the edits to stop.
+const SYNC_DELAY_MS = 1000;
 // A cool-down stage: the rear element with a 25 °C target. The heaters stay
 // off while the oven is hotter, the fan runs, and the vent is open.
 const COOL_C = 25;
@@ -104,6 +112,7 @@ class AnovaOvenCard extends HTMLElement {
         const release = () => {
           this._pressing = false;
           if (this._dirty && !this._holding) { this._dirty = false; this._render(); }
+          this._applyRemote();
         };
         window.addEventListener("pointerup", release, { once: true });
         window.addEventListener("pointercancel", release, { once: true });
@@ -115,6 +124,7 @@ class AnovaOvenCard extends HTMLElement {
   set hass(hass) {
     const before = this._hass;
     this._hass = hass;
+    if (this.isConnected !== false) this._startSync();
     // HA sets hass on every state change in the whole instance. HA replaces
     // a state object when it changes, so comparing references is enough.
     const changed = !before || this._watch.some((id) => before.states[id] !== hass.states[id]);
@@ -157,11 +167,13 @@ class AnovaOvenCard extends HTMLElement {
     };
     clearTimeout(this._tick);
     this._tick = setTimeout(tick, 1000 - (Date.now() % 1000) + 20);
+    this._startSync();
   }
 
   disconnectedCallback() {
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
     clearTimeout(this._tick);
+    this._stopSync();
   }
 
   // --- Entity helpers -----------------------------------------------------
@@ -284,6 +296,7 @@ class AnovaOvenCard extends HTMLElement {
       if (done) return;
       done = true;
       this._typing = false;
+      setTimeout(() => this._applyRemote(), 0);
       if (commit && input.value.trim() !== initial) {
         if (kind === "timer") {
           const min = parseMinutes(input.value);
@@ -322,7 +335,84 @@ class AnovaOvenCard extends HTMLElement {
 
   _setProgram(p) {
     this._setup = p;
+    this._keep(p);
+    this._render();
+  }
+
+  // --- Setup shared by the user's devices ---------------------------------
+
+  _syncKey() {
+    return `${SETUP_KEY}:${this._config.mqtt_prefix}`;
+  }
+
+  // Subscribe once per connected card. HA sends the stored value at once,
+  // then every change, also this device's own (the echo).
+  _startSync() {
+    const conn = this._hass && this._hass.connection;
+    if (this._sync || !conn || typeof conn.subscribeMessage !== "function") return;
+    const sync = { unsub: null, timer: null, inflight: false, remote: undefined, stopped: false };
+    this._sync = sync;
+    conn.subscribeMessage((ev) => {
+      if (sync.stopped) return;
+      sync.remote = ev ? ev.value : null;
+      this._applyRemote();
+    }, { type: "frontend/subscribe_user_data", key: this._syncKey() })
+      .then((unsub) => { if (sync.stopped) unsub(); else sync.unsub = unsub; })
+      // An HA without this storage: the browser copy only, as before.
+      .catch(() => { if (this._sync === sync) this._sync = { failed: true }; });
+  }
+
+  // Leaving the screen: save a waiting edit now, then stop listening.
+  _stopSync() {
+    const sync = this._sync;
+    if (!sync || sync.failed) { this._sync = null; return; }
+    if (sync.timer) this._flush();
+    sync.stopped = true;
+    if (sync.unsub) sync.unsub();
+    this._sync = null;
+  }
+
+  // Keep a changed setup: the browser copy now, HA after the edits stop.
+  _keep(p) {
     saveSetup(p);
+    const sync = this._sync;
+    if (!sync || sync.failed) return;
+    clearTimeout(sync.timer);
+    sync.timer = setTimeout(() => this._flush(), SYNC_DELAY_MS);
+  }
+
+  _flush() {
+    const sync = this._sync;
+    if (!sync || sync.failed) return;
+    clearTimeout(sync.timer);
+    sync.timer = null;
+    if (!this._hass || typeof this._hass.callWS !== "function") return;
+    sync.inflight = true;
+    this._hass.callWS({ type: "frontend/set_user_data", key: this._syncKey(), value: sharedPart(this._setup) })
+      // A failed save stays in the browser. The next edit tries again.
+      .catch(() => {})
+      .finally(() => { sync.inflight = false; this._applyRemote(); });
+  }
+
+  // Take the stored setup, unless this device is busy with its own edit.
+  // HA sends events in order and a save's echo before its reply, so the
+  // last value is HA's current one once the save is done.
+  _applyRemote() {
+    const sync = this._sync;
+    if (!sync || sync.failed || sync.remote === undefined) return;
+    if (sync.timer || sync.inflight || this._holding || this._pressing || this._typing) return;
+    const value = sync.remote;
+    sync.remote = undefined;
+    const theirs = setupFrom(value);
+    // Nothing stored yet: this device's setup becomes the user's.
+    if (!theirs) { this._flush(); return; }
+    if (JSON.stringify(sharedPart(theirs)) === JSON.stringify(sharedPart(this._setup))) return;
+    // The selected step stays on this device.
+    const p = { ...theirs, sel: clamp(this._setup.sel, 0, theirs.steps.length - 1) };
+    this._setup = p;
+    saveSetup(p);
+    // Undo would also remove the other device's change.
+    this._undo = null;
     this._render();
   }
 
@@ -366,7 +456,7 @@ class AnovaOvenCard extends HTMLElement {
     for (const [k, v] of Object.entries(change)) (STEP_KEYS.includes(k) ? st : p)[k] = v;
     normalizeStep(st);
     this._setup = p;
-    saveSetup(p);
+    this._keep(p);
     // While a button is held, only the numbers change.
     if (this._holding) this._renderValues();
     else this._render();
@@ -926,6 +1016,7 @@ class AnovaOvenCard extends HTMLElement {
       this._holding = false;
       this._dirty = false;
       this._render();
+      this._applyRemote();
     };
     window.addEventListener("pointerup", end, { once: true });
     window.addEventListener("pointercancel", end, { once: true });
@@ -1456,7 +1547,20 @@ function esc(s) {
 
 function loadSetup() {
   try {
-    const saved = JSON.parse(localStorage.getItem(SETUP_KEY) || "null");
+    const setup = setupFrom(JSON.parse(localStorage.getItem(SETUP_KEY) || "null"));
+    if (setup) return setup;
+  } catch (_) { /* no storage */ }
+  return { ...DEFAULT_SETUP, steps: [{ ...DEFAULT_STEP }] };
+}
+
+// What the user's devices share: the steps and Preheat, not the selected step.
+function sharedPart(s) {
+  return { steps: s.steps, preheat: s.preheat };
+}
+
+// A stored setup, checked as the editor needs it, or null.
+function setupFrom(saved) {
+  try {
     if (saved && Array.isArray(saved.steps) && saved.steps.length) {
       const steps = saved.steps
         .filter((st) => st && MODES.some((m) => m.key === st.mode))
@@ -1476,8 +1580,8 @@ function loadSetup() {
       normalizeStep(st);
       return { steps: [st], sel: 0, preheat: saved.preheat !== false };
     }
-  } catch (_) { /* no storage */ }
-  return { ...DEFAULT_SETUP, steps: [{ ...DEFAULT_STEP }] };
+  } catch (_) { /* a bad value */ }
+  return null;
 }
 
 function saveSetup(s) {
