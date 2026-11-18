@@ -537,35 +537,72 @@ mod tests {
         );
         // `reached` does not leak into the next stage: it heats again first.
         assert_eq!(
-            carried(&[heating(1, 20.0), heating(1, 200.0), heating(2, 150.0), heating(2, 199.0)]),
+            carried(&[
+                heating(1, 20.0),
+                heating(1, 200.0),
+                heating(2, 150.0),
+                heating(2, 199.0)
+            ]),
             ["temp_reached", "stage_started", "temp_reached"]
         );
         // Sous vide uses 0.5 °C.
-        let wet = |t| Snapshot { wet: true, target_c: Some(56.0), ..heating(1, t) };
+        let wet = |t| Snapshot {
+            wet: true,
+            target_c: Some(56.0),
+            ..heating(1, t)
+        };
         assert!(carried(&[wet(50.0), wet(55.0)]).is_empty());
         assert_eq!(carried(&[wet(50.0), wet(55.6)]), ["temp_reached"]);
     }
 
     #[test]
     fn water_empty_only_when_the_stage_needs_water() {
-        let steam = |empty| Snapshot { uses_water: true, water_tank_empty: empty, ..cooking(1) };
-        let dry = Snapshot { water_tank_empty: true, ..cooking(1) };
+        let steam = |empty| Snapshot {
+            uses_water: true,
+            water_tank_empty: empty,
+            ..cooking(1)
+        };
+        let dry = Snapshot {
+            water_tank_empty: true,
+            ..cooking(1)
+        };
         // A flag that flaps announces it once per stage.
         assert_eq!(
-            carried(&[steam(false), steam(true), steam(true), steam(false), steam(true)]),
+            carried(&[
+                steam(false),
+                steam(true),
+                steam(true),
+                steam(false),
+                steam(true)
+            ]),
             ["water_empty"]
         );
         // A new stage that needs water announces it again.
         assert_eq!(
-            carried(&[steam(true), Snapshot { stage_index: Some(2), ..steam(true) }]),
+            carried(&[
+                steam(true),
+                Snapshot {
+                    stage_index: Some(2),
+                    ..steam(true)
+                }
+            ]),
             ["stage_started", "water_empty"]
         );
         assert!(sequence(&[cooking(1), dry.clone()]).is_empty());
         // A cook that starts with the tank empty.
-        assert_eq!(sequence(&[idle(), steam(true)]), ["cook_started", "water_empty"]);
+        assert_eq!(
+            sequence(&[idle(), steam(true)]),
+            ["cook_started", "water_empty"]
+        );
         // A dry stage, then a steam stage with the tank empty.
         assert_eq!(
-            sequence(&[dry, Snapshot { stage_index: Some(2), ..steam(true) }]),
+            sequence(&[
+                dry,
+                Snapshot {
+                    stage_index: Some(2),
+                    ..steam(true)
+                }
+            ]),
             ["stage_started", "water_empty"]
         );
     }
@@ -573,16 +610,36 @@ mod tests {
     #[test]
     fn unbounded_is_a_dry_cook_with_no_end() {
         assert!(heating(1, 200.0).unbounded());
-        assert!(!Snapshot { has_end: true, ..heating(1, 200.0) }.unbounded());
-        assert!(Snapshot { has_end: true, cook_done: true, ..heating(1, 200.0) }.unbounded());
-        assert!(!Snapshot { wet: true, ..heating(1, 56.0) }.unbounded());
+        assert!(!Snapshot {
+            has_end: true,
+            ..heating(1, 200.0)
+        }
+        .unbounded());
+        assert!(Snapshot {
+            has_end: true,
+            cook_done: true,
+            ..heating(1, 200.0)
+        }
+        .unbounded());
+        assert!(!Snapshot {
+            wet: true,
+            ..heating(1, 56.0)
+        }
+        .unbounded());
         assert!(!idle().unbounded());
     }
 
     #[test]
     fn a_new_cook_over_a_running_one_is_only_cook_started() {
-        let done = Snapshot { cook_done: true, ..cooking(2) };
-        let replaced = Snapshot { cook_key: Some("cook-2".into()), cook_done: true, ..cooking(0) };
+        let done = Snapshot {
+            cook_done: true,
+            ..cooking(2)
+        };
+        let replaced = Snapshot {
+            cook_key: Some("cook-2".into()),
+            cook_done: true,
+            ..cooking(0)
+        };
         assert_eq!(sequence(&[cooking(2), replaced.clone()]), ["cook_started"]);
         assert_eq!(sequence(&[done, replaced]), ["cook_started"]);
     }
@@ -610,25 +667,40 @@ mod tests {
     fn a_fault_is_announced_once() {
         let mut prev = cooking(1);
         prev.carry(&cooking(1));
-        let mut next = Snapshot { faults: vec!["triacs_failed".into()], ..cooking(1) };
+        let mut next = Snapshot {
+            faults: vec!["triacs_failed".into()],
+            ..cooking(1)
+        };
         next.carry(&prev);
         assert_eq!(milestones(&prev, &next), [Milestone::Fault]);
         // The flag flaps: off, then on again. No second message.
         let mut off = cooking(1);
         off.carry(&next);
         assert!(milestones(&next, &off).is_empty());
-        let mut again = Snapshot { faults: vec!["triacs_failed".into()], ..cooking(1) };
+        let mut again = Snapshot {
+            faults: vec!["triacs_failed".into()],
+            ..cooking(1)
+        };
         again.carry(&off);
         assert!(milestones(&off, &again).is_empty());
         // A second fault is new.
-        let mut more = Snapshot { faults: vec!["triacs_failed".into(), "fan_failed".into()], ..cooking(1) };
+        let mut more = Snapshot {
+            faults: vec!["triacs_failed".into(), "fan_failed".into()],
+            ..cooking(1)
+        };
         more.carry(&again);
         assert_eq!(milestones(&again, &more), [Milestone::Fault]);
         // Idle with no fault forgets them; the next one is announced again.
-        let idle = Snapshot { connected: true, ..Snapshot::default() };
+        let idle = Snapshot {
+            connected: true,
+            ..Snapshot::default()
+        };
         let mut clear = idle.clone();
         clear.carry(&more);
-        let mut back = Snapshot { faults: vec!["triacs_failed".into()], ..idle };
+        let mut back = Snapshot {
+            faults: vec!["triacs_failed".into()],
+            ..idle
+        };
         back.carry(&clear);
         assert_eq!(milestones(&clear, &back), [Milestone::Fault]);
     }
@@ -642,7 +714,10 @@ mod tests {
         assert!(!s.is_cooking() && s.is_descaling());
         assert_eq!(s.phase(), "Descaling");
         let snap = Snapshot::new(Some(&s), None, true);
-        assert!(!snap.cooking && !snap.unbounded(), "no safety stop, no auto stop");
+        assert!(
+            !snap.cooking && !snap.unbounded(),
+            "no safety stop, no auto stop"
+        );
         let mut i = status("idle", 0);
         i.mode = "idle".into();
         i.active_stage_index = None;
@@ -659,7 +734,10 @@ mod tests {
         let mut steam = stage("cook");
         steam.steam_pct = 30.0;
         // A preheat shows the next stage's timer in the raw timer: no end.
-        assert!(!has_end(Some(&status("idle", 1200)), Some(&stage("preheat"))));
+        assert!(!has_end(
+            Some(&status("idle", 1200)),
+            Some(&stage("preheat"))
+        ));
         assert!(has_end(Some(&status("idle", 1200)), Some(&timed)));
         // A timer set on the oven during a stage with no timer.
         assert!(has_end(Some(&status("running", 600)), Some(&stage("cook"))));

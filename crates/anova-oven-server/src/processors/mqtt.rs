@@ -314,7 +314,11 @@ fn same_key(a: &UnboundedKey, b: &UnboundedKey) -> bool {
 
 impl SafetyClock {
     fn new(limit: Option<Duration>) -> Self {
-        SafetyClock { limit, since: None, fired: None }
+        SafetyClock {
+            limit,
+            since: None,
+            fired: None,
+        }
     }
 
     /// The limit, once the cook in `s` has been unbounded that long at
@@ -345,7 +349,10 @@ impl SafetyClock {
         if now.duration_since(since) < limit {
             return None;
         }
-        if self.fired.is_some_and(|f| now.duration_since(f) < SAFETY_RETRY) {
+        if self
+            .fired
+            .is_some_and(|f| now.duration_since(f) < SAFETY_RETRY)
+        {
             return None;
         }
         self.fired = Some(now);
@@ -579,7 +586,10 @@ impl Processor {
         if done && self.auto_stop && !machine_stops {
             self.stop_cook(sources, "auto_stop").await;
         } else if let Some(limit) = unbounded_too_long {
-            info!(hours = limit.as_secs_f64() / 3600.0, "[mqtt] safety limit: stopping the cook");
+            info!(
+                hours = limit.as_secs_f64() / 3600.0,
+                "[mqtt] safety limit: stopping the cook"
+            );
             self.stop_reason = Some(serde_json::json!({
                 "kind": "safety_limit",
                 "hours": limit.as_secs_f64() / 3600.0,
@@ -898,8 +908,8 @@ fn broker_address(url: &str) -> Result<(String, u16), String> {
 /// A manual cook from the `start` command's `{"stages": […], "title": "…"}`,
 /// with the same checks as a saved recipe.
 fn manual_cook(json: &serde_json::Value) -> Result<(String, Vec<anova_oven_api::Stage>), String> {
-    let stages: Vec<anova_oven_api::Stage> = serde_json::from_value(json["stages"].clone())
-        .map_err(|e| format!("bad stages: {e}"))?;
+    let stages: Vec<anova_oven_api::Stage> =
+        serde_json::from_value(json["stages"].clone()).map_err(|e| format!("bad stages: {e}"))?;
     let title = json
         .get("title")
         .and_then(|t| t.as_str())
@@ -1074,19 +1084,26 @@ mod tests {
         let stage = |extra: serde_json::Value| {
             let mut s = serde_json::json!({ "kind": "cook", "temperature_c": 180.0,
                 "steam_pct": 0.0, "fan_speed": 100, "heating_element_rear": true });
-            s.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            s.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
             serde_json::json!({ "stages": [s] })
         };
         // Sous vide above 100 °C.
         assert!(manual_cook(&stage(serde_json::json!({
-            "temperature_bulbs_mode": "wet", "steam_pct": 100.0 }))).is_err());
+            "temperature_bulbs_mode": "wet", "steam_pct": 100.0 })))
+        .is_err());
         // All three elements.
         assert!(manual_cook(&stage(serde_json::json!({
-            "heating_element_top": true, "heating_element_bottom": true }))).is_err());
+            "heating_element_top": true, "heating_element_bottom": true })))
+        .is_err());
         // Not stages at all.
         assert!(manual_cook(&serde_json::json!({ "stages": "pizza" })).is_err());
         // No title: the default.
-        assert_eq!(manual_cook(&stage(serde_json::json!({}))).unwrap().0, "Manual cook");
+        assert_eq!(
+            manual_cook(&stage(serde_json::json!({}))).unwrap().0,
+            "Manual cook"
+        );
     }
 
     #[test]
@@ -1212,8 +1229,14 @@ mod tests {
         assert_eq!(safety_limit(Some("2.5")), Some(Duration::from_secs(9000)));
         assert_eq!(safety_limit(Some("0")), None);
         // A typo keeps the default; it must not turn the limit off.
-        assert_eq!(safety_limit(Some("four")), Some(Duration::from_secs(4 * 3600)));
-        assert_eq!(safety_limit(Some("-1")), Some(Duration::from_secs(4 * 3600)));
+        assert_eq!(
+            safety_limit(Some("four")),
+            Some(Duration::from_secs(4 * 3600))
+        );
+        assert_eq!(
+            safety_limit(Some("-1")),
+            Some(Duration::from_secs(4 * 3600))
+        );
     }
 
     /// A dry cook with no timer, stage 1 of cook `id`.
@@ -1237,8 +1260,14 @@ mod tests {
         assert_eq!(clock.check(&cook, t0 + 3 * hour), None);
         assert_eq!(clock.check(&cook, t0 + 4 * hour), Some(4 * hour));
         // The stop failed: again after SAFETY_RETRY, not at every poll.
-        assert_eq!(clock.check(&cook, t0 + 4 * hour + Duration::from_secs(5)), None);
-        assert_eq!(clock.check(&cook, t0 + 4 * hour + SAFETY_RETRY), Some(4 * hour));
+        assert_eq!(
+            clock.check(&cook, t0 + 4 * hour + Duration::from_secs(5)),
+            None
+        );
+        assert_eq!(
+            clock.check(&cook, t0 + 4 * hour + SAFETY_RETRY),
+            Some(4 * hour)
+        );
     }
 
     #[test]
@@ -1247,11 +1276,22 @@ mod tests {
         let t0 = Instant::now();
         let mut clock = SafetyClock::new(Some(4 * hour));
         clock.check(&unbounded(Some("a")), t0);
-        let next_stage = Snapshot { stage_index: Some(2), ..unbounded(Some("a")) };
+        let next_stage = Snapshot {
+            stage_index: Some(2),
+            ..unbounded(Some("a"))
+        };
         assert_eq!(clock.check(&next_stage, t0 + 3 * hour), None);
-        assert_eq!(clock.check(&next_stage, t0 + 5 * hour), None, "3 h → 5 h on stage 2 is 2 h");
+        assert_eq!(
+            clock.check(&next_stage, t0 + 5 * hour),
+            None,
+            "3 h → 5 h on stage 2 is 2 h"
+        );
         // The last timer ended and the oven holds: counts from that moment.
-        let holding = Snapshot { has_end: true, cook_done: true, ..next_stage.clone() };
+        let holding = Snapshot {
+            has_end: true,
+            cook_done: true,
+            ..next_stage.clone()
+        };
         assert_eq!(clock.check(&holding, t0 + 6 * hour), None);
         assert_eq!(clock.check(&holding, t0 + 10 * hour), Some(4 * hour));
         // A new cook.
@@ -1266,9 +1306,15 @@ mod tests {
         let t0 = Instant::now();
         let mut clock = SafetyClock::new(Some(4 * hour));
         clock.check(&unbounded(None), t0);
-        let offline = Snapshot { connected: false, ..unbounded(Some("a")) };
+        let offline = Snapshot {
+            connected: false,
+            ..unbounded(Some("a"))
+        };
         assert_eq!(clock.check(&offline, t0 + 2 * hour), None);
-        assert_eq!(clock.check(&unbounded(Some("a")), t0 + 4 * hour), Some(4 * hour));
+        assert_eq!(
+            clock.check(&unbounded(Some("a")), t0 + 4 * hour),
+            Some(4 * hour)
+        );
     }
 
     #[test]
@@ -1278,12 +1324,18 @@ mod tests {
         let mut clock = SafetyClock::new(Some(4 * hour));
         clock.check(&unbounded(Some("a")), t0);
         assert_eq!(clock.check(&unbounded(None), t0 + hour), None);
-        assert_eq!(clock.check(&unbounded(Some("a")), t0 + 4 * hour), Some(4 * hour));
+        assert_eq!(
+            clock.check(&unbounded(Some("a")), t0 + 4 * hour),
+            Some(4 * hour)
+        );
     }
 
     #[test]
     fn safety_limit_hours_never_panic() {
-        assert_eq!(safety_limit(Some("1e300")), Some(Duration::from_secs(4 * 3600)));
+        assert_eq!(
+            safety_limit(Some("1e300")),
+            Some(Duration::from_secs(4 * 3600))
+        );
     }
 
     #[test]
@@ -1291,9 +1343,18 @@ mod tests {
         let hour = Duration::from_secs(3600);
         let t0 = Instant::now();
         for cook in [
-            Snapshot { has_end: true, ..unbounded(Some("a")) }, // a timer runs
-            Snapshot { wet: true, ..unbounded(Some("a")) },     // sous vide
-            Snapshot { cooking: false, ..unbounded(Some("a")) },
+            Snapshot {
+                has_end: true,
+                ..unbounded(Some("a"))
+            }, // a timer runs
+            Snapshot {
+                wet: true,
+                ..unbounded(Some("a"))
+            }, // sous vide
+            Snapshot {
+                cooking: false,
+                ..unbounded(Some("a"))
+            },
         ] {
             let mut clock = SafetyClock::new(Some(4 * hour));
             assert_eq!(clock.check(&cook, t0), None);
@@ -1348,7 +1409,10 @@ mod tests {
         assert_eq!(v["phase"], "Cooking");
         assert_eq!(v["stage_started_at"], "1970-01-01T00:06:40Z");
         status.cook_progress.as_mut().unwrap().current_stage_kind = "preheat".into();
-        assert_eq!(state_json(Some(&status), None, true, None)["phase"], "Preheating");
+        assert_eq!(
+            state_json(Some(&status), None, true, None)["phase"],
+            "Preheating"
+        );
     }
 
     #[test]

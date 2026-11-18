@@ -1863,7 +1863,10 @@ mod tests {
         assert!(matches!(control(&state, &start), Err(SmError::Conflict(_))));
 
         let _ = apply_apo_state(&mut state, oven_status("idle", 0));
-        assert!(matches!(control(&state, &start), Ok(OvenControl::StartDescale)));
+        assert!(matches!(
+            control(&state, &start),
+            Ok(OvenControl::StartDescale)
+        ));
 
         let mut empty = oven_status("idle", 0);
         empty.water_tank_empty = true;
@@ -1882,7 +1885,10 @@ mod tests {
         assert!(matches!(control(&state, &abort), Err(SmError::Conflict(_))));
 
         let _ = apply_apo_state(&mut state, oven_status("descale", 0));
-        assert!(matches!(control(&state, &abort), Ok(OvenControl::AbortDescale)));
+        assert!(matches!(
+            control(&state, &abort),
+            Ok(OvenControl::AbortDescale)
+        ));
         let start = ControlRequest::Descale { start: true };
         assert!(matches!(control(&state, &start), Err(SmError::Conflict(_))));
     }

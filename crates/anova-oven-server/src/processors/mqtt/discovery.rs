@@ -457,20 +457,14 @@ fn entities(topics: &Topics, options: &[String], unit: &str) -> Vec<Entity> {
             }),
         ),
         // Binary sensors.
-        entity(
-            "binary_sensor",
-            "connected",
-            "Connected",
-            Needs::Server,
-            {
-                // The last state the oven reported stays in the attributes
-                // while it is offline: the card shows if it was cooking.
-                let mut v = on_off(topics, "value_json.get('connected')", Some("connectivity"));
-                v["json_attributes_topic"] = topics.state().into();
-                v["json_attributes_template"] = LAST_SEEN.into();
-                v
-            },
-        ),
+        entity("binary_sensor", "connected", "Connected", Needs::Server, {
+            // The last state the oven reported stays in the attributes
+            // while it is offline: the card shows if it was cooking.
+            let mut v = on_off(topics, "value_json.get('connected')", Some("connectivity"));
+            v["json_attributes_topic"] = topics.state().into();
+            v["json_attributes_template"] = LAST_SEEN.into();
+            v
+        }),
         entity(
             "binary_sensor",
             "cooking",
@@ -494,7 +488,11 @@ fn entities(topics: &Topics, options: &[String], unit: &str) -> Vec<Entity> {
             "water_tank_empty",
             "Water tank empty",
             Needs::Oven,
-            on_off(topics, "value_json.get('water_tank_empty')", Some("problem")),
+            on_off(
+                topics,
+                "value_json.get('water_tank_empty')",
+                Some("problem"),
+            ),
         ),
         entity(
             "binary_sensor",
